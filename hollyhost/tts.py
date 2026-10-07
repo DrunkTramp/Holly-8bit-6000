@@ -23,7 +23,9 @@ of seconds.
 
 from __future__ import annotations
 
+import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -32,6 +34,21 @@ import numpy as np
 from holly.audio import TARGET_RATE
 
 FACE_RATE = TARGET_RATE  # 16000
+
+
+def _piper_executable(hint: str = "piper") -> str:
+    """Resolve the piper CLI without depending on PATH.
+
+    A venv's `bin/piper` is only on PATH when the venv is activated; when the host is run as
+    `.venv/bin/python -m hollyhost.app` it is not. So: honour PATH, else look next to the
+    running interpreter (the venv's own bin), else fall back to the bare name and let the
+    subprocess surface the error.
+    """
+    found = shutil.which(hint)
+    if found:
+        return found
+    sibling = Path(sys.executable).with_name(hint)
+    return str(sibling) if sibling.exists() else hint
 
 
 def resample(samples: np.ndarray, src_rate: int, dst_rate: int) -> np.ndarray:
@@ -137,11 +154,11 @@ class PiperTTS:
 
     name = "piper"
 
-    def __init__(self, model: str | Path, *, rate: int = 22050, executable: str = "piper",
+    def __init__(self, model: str | Path, *, rate: int = 22050, executable: str | None = None,
                  speaker: int | None = None, length_scale: float = 1.0):
         self.model = Path(model)
         self.rate = int(rate)
-        self.executable = executable
+        self.executable = _piper_executable(executable or "piper")
         self.speaker = speaker
         self.length_scale = float(length_scale)
 
@@ -158,6 +175,57 @@ class PiperTTS:
             raise RuntimeError(f"piper failed: {proc.stderr.decode('utf-8', 'replace').strip()}")
         pcm = np.frombuffer(proc.stdout, dtype="<i2").astype(np.float32) / 32768.0
         return pcm, self.rate
+
+
+def _default_piper_voice():
+    """A stock voice checked into `voices/` (gitignored), if one is present.
+
+    Returns (path, sample_rate) read from the voice's own `.onnx.json`, so the rate is the
+    checkpoint's real output rate rather than a guess. None when no voice has been fetched.
+    """
+    voices_dir = Path(__file__).resolve().parents[1] / "voices"
+    if not voices_dir.is_dir():
+        return None
+    for onnx in sorted(voices_dir.glob("*.onnx")):
+        cfg = onnx.with_suffix(".onnx.json")
+        rate = 22050
+        if cfg.exists():
+            try:
+                import json
+
+                rate = int(json.loads(cfg.read_text())["audio"]["sample_rate"])
+            except Exception:
+                pass
+        return onnx, rate
+    return None
+
+
+def make_tts(kind: str, *, voice=None, paths=None, rate: int | None = None):
+    """Backend factory for the app: `null` runs anywhere, `piper` needs a voice + the CLI.
+
+    `null` is the default so the Phase A skeleton runs with no downloads; it emits 22.05 kHz,
+    which exercises the exact same resample-once/keep-both seam a real Piper voice will.
+    With `--tts piper` and no `--voice`, a stock voice already in `voices/` is used.
+    """
+    kind = (kind or "null").lower()
+    if kind == "null":
+        return NullTTS(rate=rate or 22050)
+    if kind == "piper":
+        default = _default_piper_voice()
+        if not voice:
+            if not default:
+                raise ValueError(
+                    "--tts piper needs --voice, or a stock voice in voices/ "
+                    "(fetch one: python -m piper.download_voices en_US-lessac-medium --download-dir voices)"
+                )
+            voice, vrate = default
+            rate = rate or vrate
+        return PiperTTS(voice, rate=rate or 22050)
+    if kind == "script":
+        if not paths:
+            raise ValueError("--tts script needs at least one audio path")
+        return ScriptTTS(paths, rate=rate or FACE_RATE)
+    raise ValueError(f"unknown tts backend {kind!r} (null, piper, script)")
 
 
 class ScriptTTS:
