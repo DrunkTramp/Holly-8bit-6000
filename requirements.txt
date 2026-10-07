@@ -1,0 +1,8 @@
+# Build-time: tools/export_visemes.py (Phase 0). Versions verified on this machine.
+psd-tools==1.24.0
+numpy==2.5.3
+pillow==12.3.0
+
+# Runtime: uncomment from Phase 3 onward.
+# sounddevice==0.5.1   # needs `apt install libportaudio2`
+# pygame==2.6.1
