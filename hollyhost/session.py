@@ -29,6 +29,10 @@ from holly.runtime import HollyFace
 #: because the queue advances by duration, not sample count.
 SAMPLE_RATE = TARGET_RATE
 
+#: The rate the viseme pipeline insists on. Same number as SAMPLE_RATE, named separately
+#: because tts.py speaks about the *analysis* contract while session.py speaks about playback.
+FACE_RATE = TARGET_RATE
+
 
 @dataclass
 class UtteranceSource:
