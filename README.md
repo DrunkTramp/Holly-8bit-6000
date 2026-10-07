@@ -101,6 +101,11 @@ Without it, `import sounddevice` raises `OSError: PortAudio library not found` a
 interactive UI exits with a clear message. `--dry` runs the identical loop on a hand-driven
 clock, so the whole pipeline is testable on a box with no audio hardware.
 
+**Verified on real hardware** (PipeWire default device, this box): the batch UI ran
+`sounddevice` output with the clock driven by the device callback — 119 polls / 12 draws
+(10.1%) / **0 underruns** — and the interactive `LiveAudio` stream tracked a 2.15 s Piper
+utterance to within 2 ms and drained to idle with no PortAudio status errors.
+
 ## The boundary the host owns
 
 The component refuses to be the place where the sample-rate contract gets fudged:
@@ -148,9 +153,11 @@ installed but unused by the tests.)
 
 - **A0 (clock proof):** done. Batch queue drives the corner face from the device position;
   measured ~11% of polls cost a draw, idle is zero-draw, the mouth returns to rest on drain.
+  Verified on a real output device (0 underruns, clock tracks the callback).
 - **A1 (text to speech):** done. The interactive line synthesises typed text through a real
   stock Piper voice (`--tts piper`), folds it to 16k analysis + native playback, and speaks it
-  on the same clock. Verified headless with `--dry`.
+  on the same clock. Verified headless (`--dry`) and on a real device (stream drains to idle,
+  clock matches audio length).
 - **Not in Phase A:** the LLM (Phase C), the fine-tuned/OmniVoice backends (Phase B), and the
   classifier-quality judgement on real TTS voices (run `../Holly/tools/reference_player.py` and
   `render_filmstrip.py` per voice; if a voice gives poor visemes the fix is the classifier's
