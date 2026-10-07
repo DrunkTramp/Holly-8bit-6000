@@ -1,4 +1,4 @@
-# Handoff: Phase 2 (HeadAudio classifier port) is done; Phase 3 (live mic loop) is next
+# Handoff: Phase 2 (HeadAudio classifier port) is done; Phase 3 (live animation runtime, app-audio driven) is next
 
 Paste the **Kickoff prompt** at the bottom into a new session. Everything above it
 is state that session needs and cannot infer from the code alone.
@@ -15,10 +15,56 @@ model. The original continuous-100fps plan is preserved as `viseme-mouth-plan.v1
 | 1b — keyframed/cartoon retiming | **Done**, 12/s @ 30 fps settled. `holly/keyframes.py` |
 | renderer cost fix | **Done.** 61.9 -> 1.77 ms/draw, float32. `holly/render.py` |
 | 2 — port HeadAudio classifier to Python | **Done.** `holly/classify.py::HeadAudioClassifier`; front end re-matched first. |
-| 3 — real-time mic loop | Not started. This is the next task. |
+| 3 — live animation runtime (app-audio) | Not started. This is the next task. Re-scoped 2026-10-07 — see "Change of brief: Phase 3 is not a mic loop". |
 | 4 — polish (idle micro-motion, gain curves) | Not started |
 
 86 tests pass: `.venv/bin/python -m unittest discover -s tests -t .`
+
+## Change of brief: Phase 3 is not a mic loop (2026-10-07, later)
+
+The user clarified the project's actual shape: **this repo is the animation part of a
+larger application**, and Holly's mouth animates to **audio the application itself plays**
+(TTS output, files). **At no point is the intent to animate microphone input.** Voice
+input may exist in the larger project someday, but that is ASR — a separate subsystem;
+this pipeline never needs a microphone.
+
+**Integration model confirmed (2026-10-07):** the main project generates TTS audio, then
+plays it in the app with the avatar speaking in time with it. Whole utterances, generated
+before playback — so **3a (buffer-first) is the path; 3b (streaming) is not needed**
+unless the host later adopts chunked TTS. Precompute cost is a rounding error: measured
+~0.06 ms/frame -> **~30 ms to analyse a 7.7 s utterance**, done before playback starts;
+every pose is known before its slot plays.
+
+**The host app does not exist yet** (clarified 2026-10-07): this repo is the animation
+*component* of a larger project to be built later. Therefore Phase 3a's deliverable is
+(1) a **host-agnostic component API** — pure numpy in/out (`speak(samples) -> timeline`,
+`row_at(audio_time) -> weight row`), no windowing or audio-output dependency in the core,
+so whatever stack the main project eventually picks can consume it directly; and (2) a
+**standalone pygame reference player** — plays any audio file with Holly speaking in
+sync, proving playback-position clocking, dirty-check, zero-draw idle, and no final-pose
+latching; it doubles as the eyeball harness for all future tuning (Phase 4 included).
+The handoff-shape question (weight-row callback vs premultiplied mouth-rect buffer vs
+full frame) is **deferred until the main project picks its stack** — the core must not
+pre-commit. Standing recommendation for when the time comes: mouth-rect, cheapest for
+both sides (88,775 px vs 995,328).
+
+Consequences, all recorded where they matter:
+
+- **The ~115 ms latency floor is retired for the main path.** It only applied because
+  mic audio arrives non-causally. App audio can be analysed **before** the playback clock
+  reaches each slot: whole-utterance buffer -> floor is zero; chunked TTS -> keep the
+  analysis buffer >= one slot (83 ms) ahead of playback.
+- **The "live loop must use `--fade-shape lag`" rule is retired with it.** `lag` existed
+  only to keep the live path causal. `center` — the look of the shipped `visemes.mp4` —
+  is valid for the runtime. The choice is now purely aesthetic (`lead` = anticipation).
+  `test_lead_and_lag_position_the_fade` still pins the mechanics; nothing code-side changes.
+- **No running noise-floor VAD work needed.** The auto `le` percentile gate is valid
+  because the utterance buffer exists at call time; clean TTS audio is exactly what it
+  was tuned on. `derive_vad_thresholds`/`derive_le_thresholds` whole-file passes stay fine.
+- **`sounddevice`/`libportaudio2` are NOT needed.** pygame stays optional (test host only).
+- The streaming refactor (per-frame stateful VAD counters, vote ring, pre-emphasis carry)
+  is **deferred to a conditional 3b** — build it only if the host's TTS genuinely streams
+  chunks that play as they arrive. 3a (buffer-first) is most of a normal TTS integration.
 
 ## Phase 2: HeadAudio classifier port (2026-10-07)
 
@@ -102,11 +148,12 @@ periods. Histogram spread as expected: `CH`/`DD` 19.4% each, `E` 12.9%, `ih`
   "any sil frame closes the mouth". Keep `mean`.
 - **`--sil-sensitivity` is inert on this clip**: 1.0/1.2/1.5 give identical
   results because the VAD gate, not the `s1` prototype, decides silence here.
-  It may start to matter with a noisier Phase 3 mic.
+  It may start to matter if the host's audio is noisier than clean TTS.
 - The vote ring is worth keeping: `--no-vote` raises the change rate 7.8→8.3/s.
 - `--fade-shape` does not change pose statistics (verified: center/lag/lead
   identical counts) — it only positions the cross-fade. `lag` output regenerated
-  with the real classifier for the live-path eyeball check.
+  with the real classifier for the live-path eyeball check — a requirement later
+  retired by the Phase 3 re-scope (see "Change of brief: Phase 3 is not a mic loop").
 
 ### Phase 2b: "the stub still looks best" — diagnosed and fixed (2026-10-07)
 
@@ -226,20 +273,24 @@ one-pole envelope changes every frame, so there is nothing to skip — and idles
 1.5% of frames. That is **61.6 draws/s vs 14.3 draws/s: keyframing cuts actual draw work
 by 4.3x**, which is a CPU win on top of the visual one.
 
-### Latency floor (computed, to be measured in Phase 3)
+### Latency floor (mic-era; retired for the main path)
 
-Pooling is **non-causal**: a slot's pose is only computable when that slot's last analysis
-frame arrives, i.e. at the end of the slot. So the mouth lags audio by at least one slot:
-**~115 ms typical / ~149 ms worst at 12/s** (32 ms window + 83 ms slot + 33 ms frame
-quantise). At 8/s it is 157/190 ms. This replaces the original plan's "~50 ms" guess.
+Pooling is non-causal **relative to audio arrival**: a slot's pose is only computable
+when that slot's last analysis frame arrives. For a stream analysed exactly as it plays,
+the mouth lags at least one slot: **~115 ms typical / ~149 ms worst at 12/s** (32 ms
+window + 83 ms slot + 33 ms frame quantise); 157/190 ms at 8/s.
 
-**Consequence for `--fade-shape`:** `center` and `lead` both start the fade *before* the
-slot boundary, so they need a pose that is not yet knowable — `lead` needs it a whole slot
-early, which is anticipation from audio that has not arrived. **The live loop must use
-`--fade-shape lag`.** `center` stays the offline default because the whole file exists.
-This is pinned by `test_lead_and_lag_position_the_fade`. If 115 ms reads as late, delay the
-*audio* by the measured figure rather than shortening the slot — delaying audio is free and
-lossless, shortening the slot costs pose legibility.
+**The Phase 3 re-scope removes this for app-audio**: the runtime analyses the host's own
+output ahead of the playback clock, so poses are known before their slots play. Whole
+buffer -> zero floor; chunks -> floor = whatever lookahead the buffer doesn't cover
+(keep it >= 83 ms).
+
+**`--fade-shape` consequence, rewritten:** the old "live loop must use `lag`" rule existed
+only because mic audio can't know the next pose early. It is **retired** — `center` (the
+shipped `visemes.mp4` look) is valid for the runtime; `lead` is available if anticipation
+is ever wanted; `lag` remains for a hypothetical zero-lookahead stream. Pinned mechanics:
+`test_lead_and_lag_position_the_fade`. The "delay the audio by ~115 ms" advice was
+mic-era and no longer applies.
 
 **Render rate settled at 30 fps.** 60 fps was measured and rejected: both hold a pure
 pose on 76.4% of frames, so 60 fps buys nothing for legibility and doubles draw cost —
@@ -426,12 +477,12 @@ passing its tests, but the pipeline default is the real classifier. Its tell
 remains the lopsided histogram (`aa` 19.4%, `sil` 35.6% on the test clip — now
 archived as `visemes_stub.mp4`); the port spreads it (see Phase 2 measurements).
 
-Phase 3 VAD note: HeadAudio's gate is **streaming by construction** (running
-hysteresis on per-frame log energy vs absolute dBFS thresholds), so unlike the
-stub's whole-file percentile pass it needs no offline statistics. What it does
-need live is sane mic gain: −40 dBFS active threshold can misfire on a quiet
-input. `HeadAudioClassifier(vad_active_db=..., vad_inactive_db=...)` are the
-knobs; a running noise-floor estimate is the Phase 3 option if levels vary.
+Phase 3 VAD note (rewritten after the re-scope): the runtime receives the host's own
+audio output — clean, known, analysable before playback — so the whole-buffer percentile
+gate (`derive_le_thresholds`) is valid as-is. HeadAudio's shipped absolute −40/−50 dBFS
+gate (`--vad absolute`) stays available for a future streaming path where whole-file
+statistics don't exist; a running noise-floor estimate is only needed if 3b ever meets
+noisy chunked input.
 
 ## Environment (verified on this machine)
 
@@ -440,7 +491,8 @@ knobs; a running noise-floor estimate is the Phase 3 option if levels vary.
 - **No scipy.** The MFCC front end is pure numpy on purpose. Keep it that way.
 - `ffmpeg 6.1.1` with `libx264`. Audio decode and debug-video muxing shell out to ffmpeg.
 - `sounddevice` and `pygame` are **not installed** — commented out in `requirements.txt`.
-  Phase 3 also needs `apt install libportaudio2`.
+  **Neither is needed as planned**: the mic loop was retired (see the Phase 3 re-scope),
+  so no `sounddevice`/`libportaudio2`. pygame is optional, only as a standalone test host.
 - Shell is **`sh`** — bash-isms like `${PIPESTATUS[0]}` fail.
 
 ## Asset facts (measured, not assumed)
@@ -474,7 +526,7 @@ are vendored from HeadAudio (MIT); fetch commands in `model/README.md`.
 - `build/debug/visemes_ha_gate_only.mp4` — same but `--no-gain`; visually a coin toss vs the default (33/233 frames differ), kept as reference
 - `build/debug/visemes_ha_eased.mp4` — gate + gain + `--smooth-before-keys`; **rejected by the user as worst** — pre-pooling easing blurs consonant transitions, do not ship
 - `build/debug/visemes_sticky02.mp4` — `--sticky 0.2` A/B (broken-gate era, superseded; kept for reference)
-- `build/debug/visemes_keys12_lag.mp4` — the shipped configuration with `--fade-shape lag`: the live-path preview (regenerated 2026-10-07 post-gate-fix; pose stats identical to the default — fade shape only positions the cross-fade)
+- `build/debug/visemes_keys12_lag.mp4` — shipped configuration with `--fade-shape lag`: now only a preview of the alternative fade shape (the live-path `lag` requirement was retired with the mic premise)
 - `build/debug/visemes_stub.mp4`, `visemes_stub_lag.mp4` — the old stub output (old features), kept for A/B
 - `build/debug/visemes_keys12_60fps.mp4` — 60 fps, kept only as the rejected comparison
 - `build/debug/visemes_continuous.mp4` — the old continuous path (stub-era), kept for A/B
@@ -534,7 +586,7 @@ The model file is vendored in `model/` — if it ever goes missing, refetch per
 - ~~Pick `--sticky` by eye~~ **Settled by the shipped-config choice (2026-10-07): default 0.05.**
   Measured: 0.05 is inert with one-hot pooling (7.8 changes/s, broken-gate era), 0.2 = real
   hysteresis, 0.35 = sticky. With gate+gain the default lands at 6.9/s on target anyway;
-  revisit only if the live loop shows chatter.
+  revisit only if the runtime shows chatter.
 - ~~Which driver ships?~~ **Settled: the real classifier, gate+gain — the exact
   `visemes.mp4` configuration, chosen by the user over the stub (2026-10-07).** It is the
   zero-flag default of `make_timeline.py`. The pre-pooling eased variant was explicitly
@@ -542,10 +594,9 @@ The model file is vendored in `model/` — if it ever goes missing, refetch per
   the gain default, don't spend more eyeballs on it.
 - **NEW: is the `2,3,3,2` hold-length swing at 12/s @ 30 fps visible?** See the slot-grid
   caveat above. `--key-hz 10` is the uniform-grid fallback if it reads as a limp.
-- **`--fade-shape`** — `center` is the offline default (and what `visemes.mp4`, the shipped
-  configuration, uses); **`lag` is required for the live path** because `center`/`lead` are
-  non-causal. `visemes_keys12_lag.mp4` is now regenerated with the full shipped config +
-  lag, so it is the honest live-path preview worth confirming by eye in Phase 3.
+- ~~`--fade-shape` — `lag` required for the live path~~ **Retired with the mic premise**
+  (Phase 3 re-scope): analysis leads playback, so `center` (the shipped `visemes.mp4` look)
+  is valid live. `visemes_keys12_lag.mp4` is now just a preview of an alternative shape.
 - hop 256 (62.5 fps) or hop 160 (100 fps) for analysis. Keyframing makes this much less
   important; HeadAudio itself runs 62.5 fps and the prototypes expect it.
 - Bake at native 1152x864 or `--scale 0.5` for the target low-end hardware. The user is
@@ -553,9 +604,8 @@ The model file is vendored in `model/` — if it ever goes missing, refetch per
   rather than the bilinear used today — not yet specified or implemented.
 - ~~`--sticky` 0.05 and `--pool mean` are untested against a real classifier~~ **Swept**
   (`tools/sweep_phase2.py`): keep `mean` (max is degenerate for one-hot); sticky see above.
-- **Phase 3 VAD levels**: HeadAudio's gate is absolute dBFS (−40/−50). Fine on the test
-  clip (gate closes in only 2 idle periods), but a live quiet mic could sit under −40 and
-  never open. Measure real mic levels before trusting the defaults.
+- ~~Phase 3 VAD levels: measure real mic levels~~ **Moot** — no mic. The auto le-gate is
+  tuned on the host's own clean output; revisit only if 3b meets noisy streams.
 - ~~Fix `Renderer.draw_row`'s 68 ms full-canvas unpremultiply~~ **Done: 1.77 ms/draw, 10.8 MB.**
 - ~~Drop the region surfaces from float64 to float32~~ **Done: 4.09 -> 1.77 ms/draw.**
 - Target hardware is **any low-end PC**, not specifically a Pi. Current budget: ~5% of one
@@ -574,19 +624,28 @@ The model file is vendored in `model/` — if it ever goes missing, refetch per
 > should report **86 tests, OK**, and `build/visemes/visemes.npz` + `model/model-en-mixed.bin`
 > should already exist (regenerate/refetch per `tools/export_visemes.py` and `model/README.md`).
 >
-> Do **Phase 3: the real-time mic loop**. The runtime model is settled and recorded in
-> `HANDOFF.md` ("Runtime model: on-demand drawing") — clock from **audio position**,
-> **dirty-check** weight rows and skip identical frames, idle is a true **zero-draw**
-> state on the base layer, **do not latch the final pose** when speech ends, and the
-> live path must use **`--fade-shape lag`** (center/lead are non-causal). Expected mouth
-> latency is ~115 ms typical / ~149 ms worst at 12/s — if it reads late, **delay the
-> audio**, don't shorten the slot. Deps: uncomment `sounddevice`/`pygame` in
-> `requirements.txt` and `apt install libportaudio2`.
->
-> Phase 3 will need a **streaming** classifier path: `HeadAudioClassifier.__call__` is
-> batch and re-initialises the VAD counters and vote ring per call; the live loop needs
-> per-frame state carried across calls (same for the pre-emphasis initial sample in
-> `features.py`). Keep the batch contract intact — the offline tools and tests depend on it.
+> Do **Phase 3: the live animation runtime, driven by the application's own audio**.
+> The brief was clarified 2026-10-07: Holly animates to audio **the host plays** (TTS
+> buffer/file). The microphone is out of scope — the old "real-time mic loop" framing,
+> the ~115 ms latency floor, the `--fade-shape lag` requirement, and the
+> `sounddevice`/`libportaudio2` deps are all **retired** (see "Change of brief: Phase 3
+> is not a mic loop"). Integration model **confirmed**: the main project generates whole
+> TTS utterances, then plays them with the avatar in time — build **3a**, skip the
+> streaming refactor unless the host later adopts chunked TTS. Concretely: accept a whole
+> utterance buffer -> run the existing pipeline in memory (no JSON round trip needed;
+> ~30 ms per 7.7 s utterance, done before playback) -> sample poses against the host's
+> playback-position clock (`frame = audio_time * 30`) -> **dirty-check** each weight row
+> against the last drawn one and skip when equal -> idle is a true zero-draw state on the
+> base layer -> **do not latch the final pose** when the utterance ends. Because analysis
+> runs ahead of playback, the auto `le` percentile gate and `center` fade — the shipped
+> `visemes.mp4` look — are valid as-is. **The host app does not exist yet** (this repo is
+> the animation component of a future project), so the deliverable is a host-agnostic
+> component API (pure numpy in/out — `speak(samples) -> timeline`, `row_at(audio_time)`)
+> PLUS a standalone pygame reference player that proves sync, dirty-check, zero-draw idle
+> and no final-pose latching, and doubles as the tuning harness. The handoff shape
+> (callback / mouth-rect buffer / full frame) is deferred until the main project picks its
+> stack — do not pre-commit the core to any of them. Keep the batch classifier contract
+> intact — the offline tools and tests depend on it.
 >
 > Do **not** re-tune `holly/features.py` toward "nicer" MFCC defaults: every parameter is
 > pinned to HeadAudio's front end because the shipped prototypes were trained on it (the
@@ -599,7 +658,7 @@ The model file is vendored in `model/` — if it ever goes missing, refetch per
 >
 > The shipping driver and configuration are **settled** (user, 2026-10-07): the real
 > classifier with the auto `le` gate + display gain — exactly `build/debug/visemes.mp4`,
-> which is also the zero-flag default of `tools/make_timeline.py`. The live loop must use
-> the same defaults; `derive_le_thresholds` (a whole-file percentile pass) becomes a
-> running noise-floor estimate for the mic. The pre-pooling eased variant was rejected by
-> eye — do not resurrect it.
+> which is also the zero-flag default of `tools/make_timeline.py`. The runtime uses the
+> same defaults; with buffer-first analysis the whole-file percentile gate is valid
+> as-is (no running noise-floor estimate — that was a mic-era requirement). The
+> pre-pooling eased variant was rejected by eye — do not resurrect it.

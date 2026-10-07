@@ -3,6 +3,10 @@ psd-tools==1.24.0
 numpy==2.5.3
 pillow==12.3.0
 
-# Runtime: uncomment from Phase 3 onward.
-# sounddevice==0.5.1   # needs `apt install libportaudio2`
+# Runtime host: pygame is OPTIONAL, only for a standalone test window (Phase 3a);
+# the real host application may already own the surface to draw into.
 # pygame==2.6.1
+
+# NOT needed: sounddevice/libportaudio2. The Phase 3 re-scope (2026-10-07) retired the
+# mic loop — Holly animates to the host's own audio output, never a microphone.
+# sounddevice==0.5.1

@@ -60,15 +60,15 @@ Rules that fall out of the measurements:
 
 ## 3. Pipeline
 
-1. **Audio:** mic (sounddevice + libportaudio2) or file (ffmpeg decode) -> 16 kHz mono float32.
+1. **Audio:** the utterance **the application itself plays** — file or TTS buffer (ffmpeg decode / numpy array) -> 16 kHz mono float32. **Mic capture is out of scope** (brief clarified 2026-10-07: the intent was never to animate microphone input; voice input/ASR would be a separate future subsystem of the host project).
 2. **Framing:** 512-sample window, hop 256 -> 62.5 analysis fps. (The original "~100 frames/s from hop 256" was wrong: at 16 kHz, hop 256 is 62.5 fps; 100 fps needs hop 160.) Keyframing makes the analysis rate largely irrelevant — it only controls how many frames get averaged per pose.
 3. **Features:** 13-15 MFCCs per frame (numpy FFT + mel filterbank), no scipy.
 4. **Classify:** phoneme Gaussian prototypes (mean + inverse covariance), Mahalanobis distance, argmin phoneme, phoneme -> viseme lookup. HeadAudio ships the mapping.
 5. **Keyframe:** pool weights per 83 ms slot -> argmax pose -> sticky hysteresis -> expand to render fps with a frame-quantised 2-3 frame cross-fade.
 6. **Render:** static base layer + mouth-rect-only weighted overlays; at most two overlays blended per frame. **30 fps logical clock, drawn on demand — see section 5.**
-7. **Sync:** the pooling window puts a hard floor on mouth-vs-audio latency — ~115 ms
-    typical at 12/s (see section 5). Measure the real figure and delay the *audio* by that
-    much if it reads as late. The original "~50 ms delay" was a guess, not a measurement.
+7. **Sync:** the runtime is app-audio driven, so analysis runs **ahead of** the playback
+    clock — the mouth can know every pose before playback reaches its slot. The ~115 ms
+    pooling floor only applies to zero-lookahead streams (see section 5's rewrite).
 
 CPU budget, measured: analysis **0.032 ms/frame** (~0.3% of a core at 62.5 fps). Rendering
 was the bottleneck at 61.9 ms/draw and now costs **1.77 ms/draw** (section 4), so the whole
@@ -170,49 +170,50 @@ Rules this imposes on Phase 3:
   Note this conflicts with Phase 4's idle micro-motion: breathing/blinking would
   reintroduce continuous draws, so if added it must be throttled to ~1-2 draws/s.
 - **End of speech must settle to `sil`** rather than freezing on the last vowel. The VAD
-  gate already produces this offline; the live loop must not latch the final pose.
+  gate already produces this offline; the runtime must not latch the final pose.
 
-### Latency floor, and why the live path wants `--fade-shape lag`
+### Latency floor — only for zero-lookahead streaming
 
-Pooling is **inherently non-causal**: a slot's pose can only be computed once that slot's
-last analysis frame has arrived, i.e. at the *end* of the slot. The mouth is therefore at
-least one slot behind the audio, no matter how fast the analysis runs:
+Pooling is non-causal **relative to audio arrival**: a slot's pose can only be computed
+when that slot's last analysis frame has arrived. For a stream that must be analysed
+exactly as it plays, the mouth is at least one slot behind:
+**~115 ms typical / ~149 ms worst at 12/s** (32 ms window + 83 ms slot + 33 ms frame
+quantise); 157/190 ms at 8/s.
 
-| pose rate | window (512/16k) | + slot | typical | + frame quantise | worst |
-|---|---|---|---|---|---|
-| 8/s | 32 ms | 125 ms | **157 ms** | 33 ms | 190 ms |
-| 10/s | 32 ms | 100 ms | **132 ms** | 33 ms | 165 ms |
-| **12/s** | 32 ms | 83 ms | **115 ms** | 33 ms | 149 ms |
+**But the audio source is the application's own output** (clarified 2026-10-07), so the
+runtime can analyse ahead of the playback clock:
 
-This is a floor, not a bug, and it replaces the original plan's "delay audio ~50 ms" guess.
-Two things follow:
+- Whole utterance in hand (the normal TTS case): every pose is known before playback
+  reaches its slot — **the floor is zero and any fade shape is causal**.
+- Chunked TTS: the floor is whatever the analysis buffer fails to cover. Keep it at least
+  one slot (83 ms) ahead of playback and `center` remains valid.
 
-- **A higher pose rate reduces latency.** 12/s is both the better-looking rate *and* the
-  lower-latency one, so no trade-off there.
-- **`center` and `lead` fades are not causal.** They begin before the slot boundary, so
-  they need the *next* pose already known — and `lead` needs it a whole slot early, which
-  is anticipation from audio that has not arrived. The live loop should use
-  **`--fade-shape lag`**: hold the current pose, then fade to the newly-known pose at the
-  boundary. That is also the classic cartoon hold-then-change feel. `center` stays the
-  offline default because the whole file is available there.
-
-If ~115 ms still reads as late, the fix is to **delay the audio** by roughly the measured
-figure rather than to speed up the mouth — delaying audio is lossless and instant, whereas
-cutting the slot length costs pose legibility.
+**Consequence for `--fade-shape`:** the old "live loop must use `lag`" rule was premised
+on microphone input and is **retired**. `center` — the look of the shipped configuration
+(`visemes.mp4`) — is valid for the runtime as long as analysis leads playback. The choice
+is now purely aesthetic (`lead` = cartoon anticipation). `test_lead_and_lag_position_the_fade`
+still pins the mechanics. If a future zero-lookahead stream is ever required, `lag` is
+still there.
 
 ## 6. Phases
 
 - **Phase 0 — PSD audit/export script.** **Done.** `tools/export_visemes.py`: asserts expected layer names, validates the asset spec, bakes premultiplied uint8 RGBA buffers (`base` full canvas, `patches` cropped to the mouth rect) plus a manifest. Self-check vs PSD composite: mean diff 0.19, max 14.
 - **Phase 1 — offline proof.** **Done.** One WAV/FLAC -> timeline JSON -> debug filmstrip + muxed video with waveform band and playhead, so A/V offset is visible.
 - **Phase 1b — cartoon keyframe retiming.** **Done.** `holly/keyframes.py`. Replaces the attack/release envelope model for the default path; `--continuous` keeps the old one for A/B.
-- **Phase 2 — port HeadAudio classifier.** **Next.** Diff HeadAudio's actual audio front end against `holly/features.py` *first* (window, hop, mel band count, coefficient count, pre-emphasis, cepstral mean normalisation). If our features don't match the training distribution, the shipped Gaussian prototypes describe a different space and accuracy collapses silently with no error. Then: binary model parser, prototypes, Mahalanobis, phoneme -> viseme map.
-- **Phase 3 — real-time loop.** sounddevice ring buffer -> pose queue -> on-demand draw
-  into the host application's surface on the 30 fps logical clock. Remaining prerequisites:
-  add the dirty-check, replace the whole-file percentile VAD gate with a running
-  noise-floor estimate, and use `--fade-shape lag` (see section 5). Decide the handoff
-  shape: weight-row callback, premultiplied mouth-rect buffer, or full frame.
-  Measure the real A/V offset against the ~115 ms predicted floor.
-  ~~Fix the full-canvas unpremultiply~~ **done** — see section 4.
+- **Phase 2 — port HeadAudio classifier.** **Done** (2026-10-07, + 2b look fixes). Front-end diff found 10/18 parameters mismatched; `features.py` rebuilt to mirror HeadAudio exactly. `HeadAudioClassifier` parses the model (phoneme->viseme map embedded in record headers), Mahalanobis argmin, silSensitivity, vote ring, log-energy VAD; verified against HeadAudio's own JS distance oracle. Shipping config chosen by the user = the zero-flag default (`visemes.mp4`).
+- **Phase 3 — live animation runtime (app-audio driven).** Re-scoped 2026-10-07: the
+  mouth animates to audio **the host plays** (TTS buffer/file), never to a microphone.
+  Integration model confirmed: the main project generates whole TTS utterances, then
+  plays them with the avatar in time — so **3a precompute is the path and 3b streaming
+  is not needed** (revisit only if the host adopts chunked TTS). The host app itself
+  **does not exist yet**: this repo is the animation component of a future project.
+  **3a precompute (main path):** whole utterance -> existing pipeline in memory -> sample
+  poses against the playback-position clock -> dirty-checked on-demand draw. Buffer-first
+  means the auto le-gate works as-is, `center` fade is causal, and the latency floor is
+  zero. Deliverable = host-agnostic component API (pure numpy in/out) + standalone pygame
+  reference player. Handoff shape (callback / mouth-rect / full frame) deferred until the
+  main project picks its stack; core must not pre-commit. ~~Fix the full-canvas
+  unpremultiply~~ **done** — see section 4.
 - **Phase 4 — polish.** `sil` idle micro-motion (throttled — see section 5), weight
   normalisation, per-viseme gain curves.
 
@@ -230,9 +231,10 @@ cutting the slot length costs pose legibility.
 - **no scipy** — the MFCC front end is pure numpy on purpose
 - ffmpeg 6.1.1 + libx264 present; decode and video mux shell out to ffmpeg, so there is no
   decoder dependency
-- pygame, sounddevice pip-installable but **not installed yet**; Phase 3 also needs
-  `apt install libportaudio2`. pygame may not be needed at all if the host application
-  already owns a surface to draw into.
+- pygame is pip-installable but **not installed yet** — optional, only as a standalone
+  test host; the real host application may already own a surface to draw into.
+  **sounddevice/libportaudio2 are NOT needed** — the runtime is retired from the
+  mic-loop framing (2026-10-07): the audio source is the host's own output.
 
 ## Open questions
 
@@ -242,11 +244,14 @@ cutting the slot length costs pose legibility.
 - ~~Drop the region surfaces from float64 to float32~~ **Done: 4.09 -> 1.77 ms/draw.**
 - Is the `2,3,3,2` hold-length swing at 12/s @ 30 fps visible enough to matter? Compare
   against `--key-hz 10` (uniform 3-frame slots, ~5.7 changes/s) on the real classifier.
-- How does the host application want the frames — a callback with a weight row, the
-  mouth-rect buffer at `Renderer.mouth_rect`, or a full composited frame? Mouth-rect is
-  cheapest for both sides, and this decides whether pygame is needed at all.
-- `--sticky` 0.05 and `--pool mean` were picked against the placeholder classifier; re-tune
-  them against the real one.
+- ~~How does the host application want the frames~~ **Deferred: the host app doesn't
+  exist yet** (2026-10-07) — this repo builds the animation *component*. Core stays
+  host-agnostic (pure numpy); a pygame reference player proves the runtime. When the
+  main project picks its stack, choose the handoff then — mouth-rect buffer is the
+  standing recommendation (cheapest for both sides).
+- ~~`--sticky` 0.05 and `--pool mean` were picked against the placeholder classifier~~
+  **Re-tuned against the real one (Phase 2b sweep):** keep `mean` (`max` is degenerate for
+  one-hot output); sticky 0.05 is inert-to-harmless and the shipped config keeps it.
 - Bake at native 1152x864 or `--scale 0.5` for the target hardware. A retro pixel-art
   target would also change the scaling story (nearest-neighbour instead of the bilinear used
   today) — not yet specified.
