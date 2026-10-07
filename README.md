@@ -74,6 +74,20 @@ positively for a stock voice. Judge each new voice by eye with `../Holly/tools/r
 / `render_filmstrip.py`; if one gives poor visemes the fix is the classifier's gate/gain knobs,
 never the renderer.
 
+`tools/voice_check.py` runs the shipping classifier over a few sentences per voice and prints
+the numbers that separate a good voice from a degenerate one (changes/s, idle %, distinct
+visemes, analysis ms) — no device, no window. Measured across two voices:
+
+| voice | changes/s | idle | visemes/sentence | verdict |
+|---|---|---|---|---|
+| `en_GB-alan-medium` (British male — apt for Holly) | 8.0 | 47% | 9–12 | OK |
+| `en_US-lessac-medium` | 7.4 | 54% | 9–11 | OK |
+
+Both match the component's real-speech baseline (~7 changes/s at 12/s). To eyeball the look
+for a voice: synthesise a WAV (`piper -m voices/…onnx -f out.wav`) and run the animation
+repo's `make_timeline.py --audio out.wav --out t.json` then
+`render_filmstrip.py --timeline t.json --audio out.wav --video v.mp4`.
+
 ### Real audio output needs libportaudio (system package)
 
 The `sounddevice` *binding* installs via pip, but opening a stream needs the native PortAudio
@@ -112,6 +126,8 @@ hollyhost/
                tail while Holly waits for input) + FakeDevice/LiveAudio.advance for tests
   tts.py       the seam: synthesize(text) -> (float32, rate); resample-once/keep-both contract;
                NullTTS / PiperTTS / ScriptTTS; sentence splitting for later streaming
+tools/
+  voice_check.py  cross-voice classifier spot-check (changes/s, idle %, visemes) — no device
 tests/
   test_clock.py           the audio length == face clock invariant, dirty check, return-to-rest
   test_playback_loop.py   the component's seam assertions, driven through the live loop
