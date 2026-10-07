@@ -4,15 +4,23 @@
 fade math, the slot grid or the clock mapping fails here rather than showing up as "the
 mouth looks a bit detached" in the host.
 
-Measured on a 12-burst vowel train at 500 ms spacing, 12/s @ 30 fps:
+Measured on a 12-burst harmonic-vowel train at 500 ms spacing, 12/s @ 30 fps, with the
+settled one-frame cross-fade:
 
-    classifier      lead       center      lag         spread of center
-    openness-ramp  -66.7 ms   -33.3 ms     0.0 ms      33.3 ms
-    headaudio      -66.7 ms   -33.3 ms     0.0 ms       0.0 ms
+    classifier      lead       center (shipping)   lag       spread of center
+    openness-ramp  -33.3 ms          0.0 ms        0.0 ms       33.3 ms
+    headaudio      -33.3 ms          0.0 ms        0.0 ms        0.0 ms
 
-So the shipping `center` fade opens the mouth exactly **one render frame early**, and the
-three fade shapes are exactly one frame apart. That is the cartoon grid working, not a
-bug -- but it is a real 33 ms lead, and it must stay consistent.
+Three things this pins:
+
+- **The shipping `center` fade is now dead on the slot boundary: 0 ms offset.** The old
+  two-frame fade led by one frame (33 ms); one frame of fade cannot straddle anything, so
+  the incoming pose is dominant on its own boundary frame.
+- **`center` and `lag` are the same shape at one frame.** Both compute `before = 0`. Only
+  `lead` differs, by exactly one render frame. That is a consequence of the look decision,
+  not a bug -- but it means `--fade-shape lag` is no longer a distinct option at 30 fps, and
+  a test should say so loudly rather than let someone rediscover it.
+- **Jitter is zero on the real classifier.** Every detected burst reacted on the same frame.
 """
 
 from __future__ import annotations
@@ -75,21 +83,21 @@ class TestTimingGeometry(unittest.TestCase):
             with self.subTest(shape=shape):
                 self.assertEqual(len(got), BURSTS, f"{shape} missed bursts")
 
-    def test_center_leads_by_about_one_frame_and_stays_inside_half_a_slot(self):
+    def test_center_is_on_the_boundary_and_inside_half_a_slot(self):
         med = statistics.median(self.by_shape["center"])
         self.assertLess(abs(med), SLOT_MS / 2.0, "the mouth leads by more than half a pose slot")
-        self.assertAlmostEqual(med, -FRAME_MS, delta=FRAME_MS,
-                               msg=f"center fade offset moved off one frame: {med:+.1f} ms")
+        self.assertAlmostEqual(med, 0.0, delta=FRAME_MS / 2,
+                               msg=f"center fade moved off the slot boundary: {med:+.1f} ms")
 
-    def test_the_three_fade_shapes_are_ordered_and_one_frame_apart(self):
+    def test_lead_is_one_frame_early_and_lag_collapses_onto_center(self):
+        """At one frame of fade, `center` and `lag` are the same shape; only `lead` differs."""
         lead = statistics.median(self.by_shape["lead"])
         center = statistics.median(self.by_shape["center"])
         lag = statistics.median(self.by_shape["lag"])
-        self.assertLess(lead, center, "lead is not earlier than center")
-        self.assertLess(center, lag, "center is not earlier than lag")
-        # Each shape is one whole output frame from the next (2-frame fade, frame-quantised).
-        self.assertAlmostEqual(center - lead, FRAME_MS, delta=FRAME_MS / 2)
-        self.assertAlmostEqual(lag - center, FRAME_MS, delta=FRAME_MS / 2)
+        self.assertAlmostEqual(lead, -FRAME_MS, delta=FRAME_MS / 2,
+                               msg="lead no longer lands one frame early")
+        self.assertAlmostEqual(center, lag, delta=1e-6,
+                               msg="one-frame fade: center and lag must be identical")
 
     def test_offsets_are_consistent_across_events(self):
         """Jitter, not skew, is what reads as a mouth that has given up keeping up."""
@@ -121,10 +129,10 @@ class TestTimingGeometryRealClassifier(TestTimingGeometry):
             with self.subTest(shape=shape):
                 self.assertGreaterEqual(len(got), BURSTS * 0.7, f"{shape} detected too few")
 
-    def test_center_leads_by_about_one_frame_and_stays_inside_half_a_slot(self):
+    def test_center_is_on_the_boundary_and_inside_half_a_slot(self):
         med = statistics.median(self.by_shape["center"])
         self.assertLess(abs(med), SLOT_MS / 2.0)
-        self.assertAlmostEqual(med, -FRAME_MS, delta=FRAME_MS / 2)
+        self.assertAlmostEqual(med, 0.0, delta=1e-6)
 
     def test_offsets_are_consistent_across_events(self):
         for shape, got in self.by_shape.items():

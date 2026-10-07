@@ -35,13 +35,27 @@ from .vise import BASE_VISEME, VISEMES, VISEME_INDEX
 # calmer alternative if a real classifier turns out to be more volatile.
 KEY_HZ = 12.0
 
-# Cross-fade length between consecutive poses. Deliberately short: at 30 output
-# fps a 50 ms fade spans ~1.5 frames, so the change is visible as a change.
-FADE_S = 0.05
-
 # Output frame rate for the keyframed timeline. Keeping the timeline at the
 # render rate makes tools/render_filmstrip.py's resampling 1:1 instead of nearest.
 RENDER_FPS = 30.0
+
+# Cross-fade between consecutive poses, expressed in whole output frames, because a
+# sub-frame fade is not rendered at all and a seconds value can miss its midpoint.
+#
+# Settled 2026-10-07 by eye on build/debug/visemes_keys12_fade1.mp4: **one frame**.
+# The consequence is deliberate and worth knowing before reading "cross-fade" here --
+# with `center`, frames land before the boundary as `frames // 2`, so at one frame
+# nothing lands early and the incoming pose is already at u = 1.0 on its own boundary
+# frame. The blend degenerates to a **hard cut**.
+#
+# Why: at 12/s over 30 fps, slots alternate 2 and 3 frames, and a 2-frame fade ate one
+# frame off each end of a 2-frame slot -- 17% of poses (9 of 54 on test_audio.flac,
+# real classifier) collapsed to a single 33 ms flash, which is exactly the flicker
+# keyframing was introduced to prevent. One frame removes the flicker and reads crisper
+# on a pixel-art face. Side effect: `lag` also computes `before = 0`, so at one frame
+# `--fade-shape center` and `lag` are now the same thing; only `lead` differs.
+FADE_FRAMES = 1
+FADE_S = FADE_FRAMES / RENDER_FPS
 
 # Flicker suppression between mouth visemes: a new pose must beat the current
 # pose's pooled weight by this much to take over. Not applied to or from the base

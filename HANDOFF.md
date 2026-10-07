@@ -105,9 +105,13 @@ if changed:
 
 **Measured through the runtime on `test_audio.flac` (7.68 s):** analysis **13–18 ms**
 (~1.7–2.4 ms per second of speech, all of it before playback), 233 frames, 93 poses. At
-the player's 60 Hz poll: **461 polls -> 127 draws, 334 skips** (27.5% of polls cost a
-draw, 16.5 draws/s of speech). **60 s of idle polls: 0 draws.** These are the three
-claims the phase existed to prove.
+the player's 60 Hz poll on the 576x432 host bake: **461 polls -> 54 draws, 407 skips**
+(11.7% of polls cost a draw, **1.08% of one core sustained**). **60 s of idle polls: 0 draws.**
+These are the three claims the phase existed to prove.
+
+(The numbers above were first measured with the two-frame fade: 127 draws, 27.5%, 1.52%.
+Settling the one-frame fade roughly halved them — a blended frame is a distinct weight row,
+so removing the blend removes the draws. 12 distinct weight rows now cover all 233 frames.)
 
 `tools/reference_player.py` is the only file in the repo that touches pygame, and it is
 the eyeball harness for all future tuning: it mirrors `make_timeline.py`'s flags
@@ -130,6 +134,10 @@ On a 12-burst harmonic-vowel train at 500 ms spacing, 12/s @ 30 fps:
 |---|---|---|---|---|
 | openness-ramp | −66.7 ms | −33.3 ms | 0.0 ms | 33.3 ms |
 | headaudio | −66.7 ms | −33.3 ms | 0.0 ms | **0.0 ms** |
+
+**Superseded 2026-10-07 by the one-frame fade** (see "What the swing actually does"): the
+shipping offsets are now `lead` −33.3 ms, **`center` 0.0 ms**, `lag` 0.0 ms, spread 0.0 ms.
+The table above is the two-frame look, kept because it is what the fade shapes *can* do.
 
 Three things worth carrying into the host:
 
@@ -184,8 +192,9 @@ timeline is resolution-independent, as it must be). Cost per `draw_row`, median 
 the host UI rather than filling a window — and the mouth rect is the only thing a host ever
 blits, so halving the linear size quarters the per-draw cost. `holly.runtime.DEFAULT_BUFFERS`
 now points at `build/visemes_pixel/visemes.npz` (nearest, 0.5), with `NATIVE_BUFFERS` kept for
-the debug filmstrip. End-to-end at the player's 60 Hz poll over `test_audio.flac`: **1.52% of
-one core sustained** at 576x432 against 4.66% at native, same 107 draws. `tests/test_runtime.py
+the debug filmstrip. End-to-end at the player's 60 Hz poll over `test_audio.flac`: **1.08% of
+one core sustained** at 576x432 with the settled one-frame fade (1.52% with the old two-frame
+fade, 4.66% at native), same 233 frames. `tests/test_runtime.py
 ::TestHostBake` pins the size, the manifest's `nearest`/`0.5`, and the 4x rect ratio.
 
 These ms figures are medians measured on this box across the whole `draw_row` call; the
@@ -499,7 +508,7 @@ has eaten into it. On `test_audio.flac` through `HollyFace` (54 pose holds at 12
 
 | config | 1-frame holds | shortest hold | hold-length histogram (frames) |
 |---|---|---|---|
-| **12/s + 50 ms fade (shipping)** | **9 of 54 = 17%** | 1 frame = 33 ms | 1:9, 2:7, 3:18, 4:8, … |
+| **12/s + 50 ms fade (shipping until 2026-10-07)** | **9 of 54 = 17%** | 1 frame = 33 ms | 1:9, 2:7, 3:18, 4:8, … |
 | 12/s + 33 ms fade (1 frame) | 0 | 2 frames = 67 ms | 2:19, 3:19, 4:5, … |
 | **10/s + 50 ms fade (2 frames)** | 0 | 2 frames = 67 ms | 2:12, 3:10, 4:10, … |
 | 10/s + 33 ms fade (1 frame) | 0 | 3 frames = 100 ms | 3:32, 6:6, 9:3, … — perfectly uniform |
@@ -519,13 +528,22 @@ Three ways out, and only one keeps everything:
   of swapping it) is gone. Not recommended for the wrong reason to be chosen.
 - 12/s as shipped — accept 17% single-frame poses and see whether they read as liveliness.
 
-**Recommendation: `--key-hz 10`.** It is the only option that keeps both the cross-fade and
-a floor under hold length, and it was already named as the fallback in both plans. This
-changes a look that was previously chosen by eye, so it is the user's call, not a default
-flip. A/B artefacts are rendered and ready:
-`build/debug/visemes.mp4` (12/s shipping) vs `build/debug/visemes_keys10.mp4` vs
-`build/debug/visemes_keys12_fade1.mp4`. Reproduce with
-`tools/make_timeline.py --key-hz 10 --out …` + `tools/render_filmstrip.py --video …`.
+**Recommendation was `--key-hz 10`.** It was the only option that kept both the cross-fade and
+a floor under hold length. **The user overruled it on 2026-10-07 by eye: `visemes_keys12_fade1.mp4`
+(12/s + one-frame fade) looks best.** So the shipping configuration is now
+**`--key-hz 12` with `--fade-s 1/30` (one frame)**, which is `holly.keyframes.FADE_S` and the
+zero-flag default of `make_timeline.py` and `HollyFace`. `key_hz` stays 12 — the pose rate chosen
+earlier still stands — and the flicker went away anyway:
+
+- rendered holds: **0 of 54 single-frame poses** (was 17%), shortest hold 67 ms
+- **12 distinct weight rows** cover all 233 frames; `mean top weight` is exactly 1.000
+- 60 Hz poll on the host bake: **54 draws / 461 polls = 11.7%**, **1.08% of one core** (was 1.52%)
+- **`center` offset is now 0.0 ms** — dead on the slot boundary, zero jitter (was a 33 ms lead)
+- consequence to remember: **`--fade-shape center` and `lag` are now the same shape** (both
+  compute `before = 0`); only `lead` differs, by one frame. `test_sync.py` pins that loudly.
+
+`build/debug/visemes.mp4` has been re-rendered as the new reference. The old two-frame look is
+still reachable with `--fade-s 0.05`.
 
 ## CLI (flags on `tools/make_timeline.py`)
 
@@ -766,6 +784,8 @@ The model file is vendored in `model/` — if it ever goes missing, refetch per
 - ~~`--key-hz`~~ **Settled: 12/s (~7 changes/s), chosen by eye.** Real classifier lands
   at 7.8/s at default sticky — same ballpark, no reason to revisit.
 - ~~render 30 vs 60 fps~~ **Settled: 30 fps** — low-CPU goal plus the subtler 2-frame fade.
+  *Amended 2026-10-07: the fade is now one frame (a hard cut), so only the low-CPU reason
+  stands — and it is the stronger one: 1.08% of a core at the host bake.*
 - ~~Pick `--sticky` by eye~~ **Settled by the shipped-config choice (2026-10-07): default 0.05.**
   Measured: 0.05 is inert with one-hot pooling (7.8 changes/s, broken-gate era), 0.2 = real
   hysteresis, 0.35 = sticky. With gate+gain the default lands at 6.9/s on target anyway;
@@ -775,12 +795,11 @@ The model file is vendored in `model/` — if it ever goes missing, refetch per
   zero-flag default of `make_timeline.py`. The pre-pooling eased variant was explicitly
   rejected by eye; gate-only vs gate+gain is visually a coin toss (33/233 frames) — keep
   the gain default, don't spend more eyeballs on it.
-- **NEW: the `2,3,3,2` swing is measured, and the recommendation is `--key-hz 10`.** See
-  "What the swing actually does to the shipping look": at 12/s the 2-frame `center` fade
-  reduces **17% of poses to a single 33 ms frame**, which is the flicker keyframing exists to
-  prevent. 10/s removes it, keeps the cross-fade, and makes the grid uniform. Awaiting the
-  user's eye on `build/debug/visemes_keys10.mp4` vs the shipped `visemes.mp4` — a look change,
-  so not to be flipped unilaterally.
+- ~~**NEW: the `2,3,3,2` swing is measured, and the recommendation is `--key-hz 10`.**~~
+  **Settled by the user's eye (2026-10-07): 12/s + a one-frame fade (`FADE_S = 1/30`).** The
+  recommendation of `--key-hz 10` was overruled — the flicker was fixed by shortening the fade
+  instead, which also halved the draw cost and zeroed the sync offset. See "What the swing
+  actually does to the shipping look". Do not re-open the pose rate; the fade is now the lever.
 - ~~`--fade-shape` — `lag` required for the live path~~ **Retired with the mic premise**
   (Phase 3 re-scope): analysis leads playback, so `center` (the shipped `visemes.mp4` look)
   is valid live. `visemes_keys12_lag.mp4` is now just a preview of an alternative shape.
@@ -798,7 +817,7 @@ The model file is vendored in `model/` — if it ever goes missing, refetch per
   With a correction to the plan: "384x288 = half of 1152x864" is wrong — half is **576x432**;
   384x288 is a **third** (`--scale 0.3333333333`). The face is a corner element of the host UI,
   so the smaller mouth rect wins: 22,176 px/draw against 88,775, measured 0.72 ms against
-  ~2.9 ms, 1.52% against 4.66% of a core at a 60 Hz poll. `holly.runtime.DEFAULT_BUFFERS` is
+  ~2.9 ms, 1.08% against 4.66% of a core at a 60 Hz poll. `holly.runtime.DEFAULT_BUFFERS` is
   now `build/visemes_pixel/visemes.npz`; `NATIVE_BUFFERS` stays for the debug filmstrip, and
   `build/visemes_third/` remains if a tighter corner is ever wanted.
 - ~~**Handoff shape is now a live question**~~ **Settled by the API, not by argument.**
@@ -843,9 +862,10 @@ The model file is vendored in `model/` — if it ever goes missing, refetch per
 > if changed: blit(frame, rect)                          # 168x132 px at the host bake, 0.72 ms
 > ```
 >
-> Its timing geometry is measured and pinned, not assumed: the shipping `center` fade leads the
-> acoustic event by exactly one render frame (33 ms) with zero jitter on the real classifier
-> (`tools/check_sync.py --compare`, `tests/test_sync.py`).
+> Its timing geometry is measured and pinned, not assumed: with the settled one-frame fade the
+> mouth changes pose **exactly on the slot boundary — 0 ms offset, zero jitter** — and
+> `--fade-shape center` and `lag` are now the same shape (`lead` is one frame early).
+> `tools/check_sync.py --compare`, `tests/test_sync.py`.
 >
 > The dirty check, the zero-draw idle and the no-final-pose-latch rule (`IDLE_ROW` outside
 > speech) all live in the core — the host must not reimplement them, and must not latch a
@@ -899,18 +919,18 @@ The model file is vendored in `model/` — if it ever goes missing, refetch per
 >
 > Still open, in rough priority order — none of these block Phase A:
 >
-> - **Sync geometry is measured; the look still is not.** `tools/check_sync.py` says the
->   shipping `center` fade opens the mouth exactly one render frame (33 ms) early with **zero
->   jitter** on the real classifier, and `tests/test_sync.py` pins that. What only a human can
->   decide: whether a 33 ms lead *reads* right next to a voice, and whether `lag` (0 ms offset,
->   old pose holds to the boundary) looks stiffer. Run
+> - **Sync geometry is measured; the look still is not.** With the settled one-frame fade the
+>   mouth reacts exactly on the slot boundary (**0 ms offset, zero jitter**), pinned by
+>   `tests/test_sync.py` and measurable via `tools/check_sync.py --compare`. What only a human
+>   can decide: whether hard-cut pose changes read as Holly next to a real TTS voice — the
+>   judgement was made on `test_audio.flac` and on silent filmstrips. Run
 >   `.venv/bin/python tools/reference_player.py --audio test_audio.flac` on a real device as
->   the first act of Phase A — it has only ever been run headless on SDL's dummy audio.
-> - **`2,3,3,2` hold-swing — measured, recommendation is `--key-hz 10`, needs the user's eye.**
->   At the shipping 12/s + 2-frame fade, 17% of poses collapse to one 33 ms frame; 10/s
->   eliminates that, keeps the cross-fade, and makes the slot grid uniform (3 frames).
->   Compare `build/debug/visemes_keys10.mp4` against `build/debug/visemes.mp4` before changing
->   any default — do not flip `key_hz` on your own reading of the numbers.
+>   the first act of Phase A; it has only ever been run headless on SDL's dummy audio.
+> - **`2,3,3,2` hold-swing — settled by the user's eye: 12/s with a one-frame fade.** The
+>   two-frame fade was collapsing 17% of poses to a single 33 ms frame; shortening the fade
+>   fixed it, kept the pose rate, halved the draw cost (1.08% of a core at the host bake) and
+>   zeroed the sync offset. Do not re-open `--key-hz`; the fade is the lever now. Note the
+>   side effect: at one frame, `--fade-shape center` and `lag` are identical.
 > - **Classifier behaviour on synthetic speech** — TTS output is cleaner than the human
 >   speech the HeadAudio prototypes were trained on, but prosody differs. Test each voice
 >   with `tools/render_filmstrip.py` / the reference player; if a voice gives poor visemes the

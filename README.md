@@ -28,10 +28,11 @@ yourself. Outside speech both return the base pose, so the mouth returns to rest
 costs nothing — the dirty check, the zero-draw idle and the no-final-pose-latch rule are the
 component's job, not the host's.
 
-One number to know: the default `center` cross-fade opens the mouth **one render frame (33 ms)
-before** the acoustic event, with zero jitter. That is the cartoon timing grid, and it is
-measured and test-pinned — `tools/check_sync.py --compare` will show it, and `--fade-shape lag`
-is the zero-offset alternative if a host ever wants it.
+One number to know: the default cross-fade is **one output frame**, which at 30 fps is a hard
+cut — the mouth changes pose exactly on the slot boundary, **0 ms offset** from the acoustic
+event, with zero jitter. That was chosen by eye over the old two-frame blend, which was
+reducing 17% of poses to a single 33 ms flash. `--fade-shape lead` anticipates by one frame;
+at one frame of fade `center` and `lag` are the same shape.
 
 Nothing in the core opens a window or touches an audio device. `tools/reference_player.py`
 (pygame) is the worked example and the tuning harness.

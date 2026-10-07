@@ -1016,7 +1016,12 @@ class TestEndToEnd(unittest.TestCase):
         weights = normalize_weights(OpennessRamp(floor, ceiling)(features))
 
         _, dense, times, out_fps = keyframe_weights(
-            weights, analysis_fps=16000 / HOP_SIZE, key_hz=12.0, out_fps=30.0
+            weights, analysis_fps=16000 / HOP_SIZE, key_hz=12.0, out_fps=30.0,
+            # Explicit, not the module default: the settled look is a one-frame fade, which
+            # degenerates to a hard cut and produces no blended frames at all. This test is
+            # about fractional weights surviving the JSON round trip, so it needs a fade
+            # that actually blends, whatever ships.
+            fade_s=0.05,
         )
         timeline = build_timeline(dense, times, out_fps)
         restored = timeline_weights(timeline)

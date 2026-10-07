@@ -141,8 +141,8 @@ Each phase is harness-sized: independently testable, ends in something you can s
 
 ## 7. Budget sanity
 
-Animation: **1.5% of one core during speech** at the 576x432 host bake (60 Hz poll, measured),
-~4.7% at native 1152x864, **0% idle** — the dirty check skips ~79% of polls and idle costs
-nothing. Piper: real-time or faster on a Pi 4. The remaining budget is all the LLM's — which is
-why model size is the one dial that actually determines whether this lives on the Pi or on the
-old PC.
+Animation: **1.1% of one core during speech** at the 576x432 host bake with the settled
+one-frame fade (60 Hz poll, measured; 1.5% with the old two-frame fade, ~4.7% at native),
+**0% idle** — the dirty check skips ~88% of polls and idle costs nothing. Piper: real-time or
+faster on a Pi 4. The remaining budget is all the LLM's — which is why model size is the one
+dial that actually determines whether this lives on the Pi or on the old PC.

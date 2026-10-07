@@ -36,7 +36,7 @@ fade at 60 fps is smoother but reads less like a deliberate pose change.
 | Pose slots | 12/s (83.3 ms each) | 93 slots over 7.68 s |
 | Actual pose changes | — | **55 total, 7.1/s** |
 | Mean hold | — | 138 ms (shortest 83 ms) |
-| Cross-fade | **2 frames at 30 fps = 67 ms (chosen)** | one true 50/50 frame per change |
+| Cross-fade | ~~**2 frames at 30 fps = 67 ms (chosen)**~~ **1 frame at 30 fps = a hard cut (chosen by eye 2026-10-07)** | at 12/s the 2-frame fade ate both frames of a 2-frame slot and flashed 17% of poses for 33 ms; 1 frame removes the flicker, halves the draw cost and zeroes the sync offset. Consequence: `center` and `lag` are now the same shape. |
 | Cross-fade | 3 frames at 60 fps = 50 ms (rejected: 2x draw cost) | exactly the intended 50 ms |
 | Distinct drawn states | — | 54 of 233 frames @30 fps (23%) |
 
