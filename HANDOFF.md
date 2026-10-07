@@ -20,7 +20,7 @@ model. The original continuous-100fps plan is preserved as `viseme-mouth-plan.v1
 | 3b — streaming-TTS refactor | Not started, **conditional**: build it only if the host adopts chunked TTS that plays as it arrives. |
 | 4 — polish (idle micro-motion, gain curves) | Not started |
 
-128 tests pass: `.venv/bin/python -m unittest discover -s tests -t .`
+139 tests pass: `.venv/bin/python -m unittest discover -s tests -t .`
 
 ## Change of brief: Phase 3 is not a mic loop (2026-10-07, later)
 
@@ -113,6 +113,39 @@ the eyeball harness for all future tuning: it mirrors `make_timeline.py`'s flags
 the mouth rect** (`pygame.display.update(rect)`). The clock is `mixer.music.get_pos()`,
 not `time.time()`; the loop refuses to jump the clock before the mixer has spun up, and
 sets it past the end once the queue drains so the return-to-rest path is exercised.
+
+### Sync geometry is now measured, not just eyeballed (2026-10-07)
+
+Phase A's exit criteria were "sync verified by eye, idle is zero-draw, no final-pose latch,
+mouth-rect-only blits". Three of the four were already automated; "by eye" was not, so
+`tools/check_sync.py` measures it: a train of bursts at **known** times, then the offset
+from each event to the **first** frame whose mouth leaves the base pose.
+
+On a 12-burst harmonic-vowel train at 500 ms spacing, 12/s @ 30 fps:
+
+| classifier | `lead` | `center` (shipping) | `lag` | spread of `center` |
+|---|---|---|---|---|
+| openness-ramp | −66.7 ms | −33.3 ms | 0.0 ms | 33.3 ms |
+| headaudio | −66.7 ms | −33.3 ms | 0.0 ms | **0.0 ms** |
+
+Three things worth carrying into the host:
+
+- **The shipping `center` fade opens the mouth exactly one render frame early — 33 ms.**
+  That is the fade straddling the slot boundary by design, and it is inside the half-slot
+  (41.7 ms) tolerance the cartoon grid allows. It is also the kind of thing that is hard to
+  see and easy to state, so if Holly ever reads as "slightly ahead", `--fade-shape lag` is
+  the zero-offset option and the cost is that the old pose holds to the boundary.
+- **Jitter is zero on the real classifier.** Every one of the 10 detected bursts reacted at
+  the identical frame. Consistency is what makes a mouth read as attached to a voice; a
+  33 ms lead that never varies looks better than a ±40 ms scatter that does.
+- **Coverage is not a timing problem.** The real classifier ignored 2 of 12 vowel bursts. A
+  synthetic harmonic tone is speech-like without being speech; whether a *TTS* voice gets
+  good visemes is Phase B's filmstrip question, judged on the gate/gain knobs, not here.
+
+`tests/test_sync.py` pins all of it: detection count, the one-frame `center` lead, the
+strict `lead < center < lag` ordering one frame apart, and jitter bounds (≤ 1 slot for the
+stub, ≤ 1 frame for the real classifier). It inherits its own test case onto the real
+classifier rather than duplicating the assertions.
 
 ### Scaled bakes, nearest-neighbour, and a bug that only scaled buffers had (2026-10-07)
 
@@ -644,6 +677,8 @@ tools/make_timeline.py      Phase 1+1b+2: audio -> timeline JSON (headaudio by d
 tools/render_filmstrip.py   Phase 1: timeline -> strip.png + muxed visemes.mp4
 tools/sweep_phase2.py       Phase 2 tuning sweep: sticky/pool/fade-shape/sil-sensitivity A/B
 tools/diagnose_phase2.py    Phase 2b: accuracy/distance/VAD-gate diagnostics vs the embedded transcript
+tools/check_sync.py         When the mouth moves vs when the sound happens: burst train with
+                            known event times -> signed ms offsets, per fade-shape
 tools/reference_player.py   Phase 3a: standalone pygame player -- the sync proof and the tuning
                             harness. The ONLY file that imports pygame; the core never does.
 holly/vise.py               canonical 15 visemes, index map
@@ -660,6 +695,7 @@ holly/runtime.py            Phase 3a: HollyFace -- speak()/row_at()/frame_at(), 
 tests/test_pipeline.py      86 tests pinning the inter-stage contracts
 tests/test_runtime.py       32 tests pinning the component API's contracts
 tests/test_bake.py          5 tests pinning manifest/buffer consistency at every bake scale
+tests/test_sync.py          11 tests pinning the timing geometry (one-frame center lead, jitter)
 tests/fixtures/headaudio_distances_oracle.csv   JS-computed distance matrix (accuracy oracle)
 build/                      all generated artefacts, regenerable
 ```
@@ -672,6 +708,7 @@ build/                      all generated artefacts, regenerable
 .venv/bin/python tools/export_visemes.py --scale 0.5 --resample nearest --out build/visemes_pixel
 .venv/bin/python tools/make_timeline.py --audio test_audio.flac
 .venv/bin/python tools/render_filmstrip.py --audio test_audio.flac --video build/debug/visemes.mp4
+.venv/bin/python tools/check_sync.py --compare
 .venv/bin/python -m unittest discover -s tests -t .
 
 # Phase 3a reference player (needs the optional pygame; the core does not):
@@ -761,6 +798,10 @@ The model file is vendored in `model/` — if it ever goes missing, refetch per
 > if changed: blit(frame, rect)                          # 168x132 px at the host bake, 0.72 ms
 > ```
 >
+> Its timing geometry is measured and pinned, not assumed: the shipping `center` fade leads the
+> acoustic event by exactly one render frame (33 ms) with zero jitter on the real classifier
+> (`tools/check_sync.py --compare`, `tests/test_sync.py`).
+>
 > The dirty check, the zero-draw idle and the no-final-pose-latch rule (`IDLE_ROW` outside
 > speech) all live in the core — the host must not reimplement them, and must not latch a
 > final pose when it thinks an utterance is over. `tools/reference_player.py` is the working
@@ -809,11 +850,13 @@ The model file is vendored in `model/` — if it ever goes missing, refetch per
 >
 > Still open, in rough priority order — none of these block Phase A:
 >
-> - **Sync has never been judged by ear.** `tools/reference_player.py` was only ever run
->   headless on SDL's dummy audio, which drains the buffer faster than realtime. That proves
->   the code path, the clock mapping and the blit counts — not that the mouth *looks* locked
->   to the voice. Run it with a real device (`--audio test_audio.flac`) as the first act of
->   Phase A, before writing host code that depends on the component being right.
+> - **Sync geometry is measured; the look still is not.** `tools/check_sync.py` says the
+>   shipping `center` fade opens the mouth exactly one render frame (33 ms) early with **zero
+>   jitter** on the real classifier, and `tests/test_sync.py` pins that. What only a human can
+>   decide: whether a 33 ms lead *reads* right next to a voice, and whether `lag` (0 ms offset,
+>   old pose holds to the boundary) looks stiffer. Run
+>   `.venv/bin/python tools/reference_player.py --audio test_audio.flac` on a real device as
+>   the first act of Phase A — it has only ever been run headless on SDL's dummy audio.
 > - **`2,3,3,2` hold-length swing at 12/s @ 30 fps** — decide by eye in the live host; fall
 >   back to `--key-hz 10` (uniform grid) if it reads as a limp.
 > - **Classifier behaviour on synthetic speech** — TTS output is cleaner than the human

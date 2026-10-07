@@ -28,6 +28,11 @@ yourself. Outside speech both return the base pose, so the mouth returns to rest
 costs nothing — the dirty check, the zero-draw idle and the no-final-pose-latch rule are the
 component's job, not the host's.
 
+One number to know: the default `center` cross-fade opens the mouth **one render frame (33 ms)
+before** the acoustic event, with zero jitter. That is the cartoon timing grid, and it is
+measured and test-pinned — `tools/check_sync.py --compare` will show it, and `--fade-shape lag`
+is the zero-offset alternative if a host ever wants it.
+
 Nothing in the core opens a window or touches an audio device. `tools/reference_player.py`
 (pygame) is the worked example and the tuning harness.
 
@@ -38,7 +43,8 @@ Nothing in the core opens a window or touches an audio device. `tools/reference_
 .venv/bin/python tools/export_visemes.py --scale 0.5 --resample nearest --out build/visemes_pixel
 .venv/bin/python tools/make_timeline.py --audio test_audio.flac
 .venv/bin/python tools/reference_player.py --audio test_audio.flac
-.venv/bin/python -m unittest discover -s tests -t .    # 128 tests
+.venv/bin/python tools/check_sync.py --compare         # mouth-vs-sound offset, per fade shape
+.venv/bin/python -m unittest discover -s tests -t .    # 139 tests
 ```
 
 `build/` is generated and gitignored — a fresh clone needs the export step before anything
