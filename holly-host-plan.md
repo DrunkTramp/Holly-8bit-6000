@@ -114,8 +114,10 @@ Each phase is harness-sized: independently testable, ends in something you can s
   quality directly drives mouth quality). Exit criteria: Holly sounds and answers like
   Holly.
 - **E. Polish (optional, pull in any order).** Barge-in; idle micro-motion (old plan's
-  Phase 4); `2,3,3,2` hold-swing check at 12/s (animation repo's open question — decide
-  by eye in the live host, fall back to `--key-hz 10` if it reads as a limp); Red Dwarf
+  Phase 4); the `2,3,3,2` hold-swing check — now measured: at 12/s the 2-frame fade collapses
+  17% of poses to a single 33 ms frame, and `--key-hz 10` fixes it while keeping the fade, so
+  settle it by eye on `build/debug/visemes_keys10.mp4` vs `build/debug/visemes.mp4` rather than
+  by argument; Red Dwarf
   LoRA fine-tune as its own side project.
 
 ## 6. Risks and known unknowns

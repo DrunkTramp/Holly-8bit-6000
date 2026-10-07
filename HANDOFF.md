@@ -491,6 +491,42 @@ measured min pure frames per slot = 1 at both 12 and 15, 2 at 10. If the swing e
 as a limp, `--key-hz 10` (~5.7 changes/s) is the uniform alternative; compare on the real
 classifier before changing the default.
 
+### What the swing actually does to the shipping look (2026-10-07, measured on the real classifier)
+
+The caveat above counts *pure hold* frames per slot. The thing an eye judges is different:
+how long each pose stays the dominant viseme in the rendered timeline, after the cross-fade
+has eaten into it. On `test_audio.flac` through `HollyFace` (54 pose holds at 12/s):
+
+| config | 1-frame holds | shortest hold | hold-length histogram (frames) |
+|---|---|---|---|
+| **12/s + 50 ms fade (shipping)** | **9 of 54 = 17%** | 1 frame = 33 ms | 1:9, 2:7, 3:18, 4:8, … |
+| 12/s + 33 ms fade (1 frame) | 0 | 2 frames = 67 ms | 2:19, 3:19, 4:5, … |
+| **10/s + 50 ms fade (2 frames)** | 0 | 2 frames = 67 ms | 2:12, 3:10, 4:10, … |
+| 10/s + 33 ms fade (1 frame) | 0 | 3 frames = 100 ms | 3:32, 6:6, 9:3, … — perfectly uniform |
+
+So the open question was aiming slightly wrong. The visible artifact is not the 67/100 ms
+swing in isolation — it is that **the 2-frame `center` fade lands on 2-frame slots and
+reduces 17% of poses to a single 33 ms flash**, which is precisely the flicker keyframing
+was introduced to remove. It is arithmetic, not noise: 30/12 = 2.5 frames per slot, and a
+slot that got 2 frames loses one to the incoming fade and one to the outgoing.
+
+Three ways out, and only one keeps everything:
+
+- **10/s + the shipping 2-frame fade** — no single-frame holds, the cross-fade survives, and
+  slots are uniform (3 frames each). ~5.7 changes/s instead of ~6.9, so slightly calmer.
+- 12/s + 1-frame fade — kills the flicker but a 1-frame fade at 30 fps is a **hard cut**: the
+  eased closure the renderer is designed around (`sil` lowering the overlay's alpha instead
+  of swapping it) is gone. Not recommended for the wrong reason to be chosen.
+- 12/s as shipped — accept 17% single-frame poses and see whether they read as liveliness.
+
+**Recommendation: `--key-hz 10`.** It is the only option that keeps both the cross-fade and
+a floor under hold length, and it was already named as the fallback in both plans. This
+changes a look that was previously chosen by eye, so it is the user's call, not a default
+flip. A/B artefacts are rendered and ready:
+`build/debug/visemes.mp4` (12/s shipping) vs `build/debug/visemes_keys10.mp4` vs
+`build/debug/visemes_keys12_fade1.mp4`. Reproduce with
+`tools/make_timeline.py --key-hz 10 --out …` + `tools/render_filmstrip.py --video …`.
+
 ## CLI (flags on `tools/make_timeline.py`)
 
 `--key-hz` (12) `--render-fps` (30) `--fade-s` (0.05) `--fade-shape center|lead|lag`
@@ -739,8 +775,12 @@ The model file is vendored in `model/` — if it ever goes missing, refetch per
   zero-flag default of `make_timeline.py`. The pre-pooling eased variant was explicitly
   rejected by eye; gate-only vs gate+gain is visually a coin toss (33/233 frames) — keep
   the gain default, don't spend more eyeballs on it.
-- **NEW: is the `2,3,3,2` hold-length swing at 12/s @ 30 fps visible?** See the slot-grid
-  caveat above. `--key-hz 10` is the uniform-grid fallback if it reads as a limp.
+- **NEW: the `2,3,3,2` swing is measured, and the recommendation is `--key-hz 10`.** See
+  "What the swing actually does to the shipping look": at 12/s the 2-frame `center` fade
+  reduces **17% of poses to a single 33 ms frame**, which is the flicker keyframing exists to
+  prevent. 10/s removes it, keeps the cross-fade, and makes the grid uniform. Awaiting the
+  user's eye on `build/debug/visemes_keys10.mp4` vs the shipped `visemes.mp4` — a look change,
+  so not to be flipped unilaterally.
 - ~~`--fade-shape` — `lag` required for the live path~~ **Retired with the mic premise**
   (Phase 3 re-scope): analysis leads playback, so `center` (the shipped `visemes.mp4` look)
   is valid live. `visemes_keys12_lag.mp4` is now just a preview of an alternative shape.
@@ -866,8 +906,11 @@ The model file is vendored in `model/` — if it ever goes missing, refetch per
 >   old pose holds to the boundary) looks stiffer. Run
 >   `.venv/bin/python tools/reference_player.py --audio test_audio.flac` on a real device as
 >   the first act of Phase A — it has only ever been run headless on SDL's dummy audio.
-> - **`2,3,3,2` hold-length swing at 12/s @ 30 fps** — decide by eye in the live host; fall
->   back to `--key-hz 10` (uniform grid) if it reads as a limp.
+> - **`2,3,3,2` hold-swing — measured, recommendation is `--key-hz 10`, needs the user's eye.**
+>   At the shipping 12/s + 2-frame fade, 17% of poses collapse to one 33 ms frame; 10/s
+>   eliminates that, keeps the cross-fade, and makes the slot grid uniform (3 frames).
+>   Compare `build/debug/visemes_keys10.mp4` against `build/debug/visemes.mp4` before changing
+>   any default — do not flip `key_hz` on your own reading of the numbers.
 > - **Classifier behaviour on synthetic speech** — TTS output is cleaner than the human
 >   speech the HeadAudio prototypes were trained on, but prosody differs. Test each voice
 >   with `tools/render_filmstrip.py` / the reference player; if a voice gives poor visemes the
