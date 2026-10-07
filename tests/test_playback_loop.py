@@ -233,6 +233,38 @@ class TestSampleRateContract(unittest.TestCase):
         # analysis was 16k (speak() would have raised otherwise); playback stayed at 22.05k.
         self.assertAlmostEqual(session.audio.queued_seconds, session.face.queued_duration, places=3)
 
+    def test_multi_utterance_22k_seams_stay_aligned(self):
+        """The boundary the task flags as easy to get wrong, across seams.
+
+        Several foreign-rate utterances queued back-to-back: the clock still lines up at two
+        rates because the queue advances by *duration*, not sample count. Polling the frozen
+        live clock, every covered position maps to the right utterance's frame and every gap
+        is idle — the property Phase C's sentence-streaming depends on.
+        """
+        from hollyhost.audio import LiveAudio
+        from hollyhost.session import LiveSession
+        from hollyhost.tts import NullTTS
+
+        face = HollyFace(classifier="openness-ramp", model_path=None)
+        audio = LiveAudio(22050)
+        session = LiveSession(face, audio, gap=0.3, tts=NullTTS(rate=22050))
+        queued = [session.say(t) for t in ("one two three", "four five", "six seven eight nine")]
+        self.assertEqual(len(queued), 3)
+        self.assertAlmostEqual(audio.queued_seconds, face.queued_duration, places=3)
+
+        per = round(22050 / POLL_HZ)
+        for _ in range(int((audio.queued_seconds + 1.0) * POLL_HZ) + 1):
+            t = audio.advance(per)
+            owner = [u for u in queued if u.covers(t)]
+            row = face.row_at(t)
+            if owner:
+                self.assertEqual(len(owner), 1, f"t={t:.3f} covered by {len(owner)} utterances")
+                u = owner[0]
+                idx = min(int((t - u.start) * u.render_fps), u.frames - 1)
+                np.testing.assert_array_equal(row, u.weights[idx])
+            else:
+                self.assertIs(row, IDLE_ROW, f"t={t:.3f} in a seam but not idle")
+
 
 if __name__ == "__main__":
     unittest.main()
