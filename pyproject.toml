@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "holly-host"
+version = "0.0.1"
+description = "Keyboard-driven conversational Holly: LLM + TTS + the Holly-8bit-6000 animated face"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.26",
+    "holly-8bit-6000",          # the animation component; pip install -e ../Holly
+    "sounddevice>=0.4.6",       # audio OUTPUT only. Never a microphone.
+]
+
+[project.optional-dependencies]
+ui = ["pygame==2.6.1"]
+piper = ["piper-tts>=1.2"]
+dev = ["pytest>=8"]
+
+[tool.setuptools]
+packages = ["hollyhost"]
