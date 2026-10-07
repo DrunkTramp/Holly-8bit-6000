@@ -44,7 +44,7 @@ Nothing in the core opens a window or touches an audio device. `tools/reference_
 .venv/bin/python tools/make_timeline.py --audio test_audio.flac
 .venv/bin/python tools/reference_player.py --audio test_audio.flac
 .venv/bin/python tools/check_sync.py --compare         # mouth-vs-sound offset, per fade shape
-.venv/bin/python -m unittest discover -s tests -t .    # 139 tests
+.venv/bin/python -m unittest discover -s tests -t .    # 147 tests
 ```
 
 `build/` is generated and gitignored — a fresh clone needs the export step before anything

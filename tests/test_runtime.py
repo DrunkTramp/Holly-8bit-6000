@@ -131,8 +131,9 @@ class TestAnalysisShape(unittest.TestCase):
     def test_timeline_covers_the_audio(self):
         audio_s = self.samples.size / TARGET_RATE
         self.assertLessEqual(audio_s, self.utterance.timeline_duration + 1e-9)
-        # expand_keys rounds the last slot up, so the overshoot is under one pose slot.
-        self.assertLess(self.utterance.tail, 1.0 / self.face.key_hz)
+        # expand_keys rounds up twice: to whole key slots, then to whole output frames.
+        bound = 1.0 / self.face.key_hz + 1.0 / self.face.render_fps
+        self.assertLessEqual(self.utterance.tail, bound + 1e-9)
         self.assertAlmostEqual(self.utterance.audio_duration, audio_s, places=9)
 
     def test_the_buffer_actually_moves_the_mouth(self):

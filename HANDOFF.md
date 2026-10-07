@@ -20,7 +20,7 @@ model. The original continuous-100fps plan is preserved as `viseme-mouth-plan.v1
 | 3b — streaming-TTS refactor | Not started, **conditional**: build it only if the host adopts chunked TTS that plays as it arrives. |
 | 4 — polish (idle micro-motion, gain curves) | Not started |
 
-139 tests pass: `.venv/bin/python -m unittest discover -s tests -t .`
+147 tests pass: `.venv/bin/python -m unittest discover -s tests -t .`
 
 ## Change of brief: Phase 3 is not a mic loop (2026-10-07, later)
 
@@ -96,9 +96,12 @@ if changed:
   host to keep the native-rate buffer for playback. Analysis and playback buffers must
   correspond 1:1 in time; the core refuses to be the place where that gets fudged.
 - Utterance `audio_duration` (not timeline length) is what the queue advances by, because
-  the queue must stay honest against the audio clock. `expand_keys` rounds the last slot
-  up, so a timeline can run up to one slot past its audio — exposed as `Utterance.tail`
-  (measured 87 ms on `test_audio.flac`) and simply never reached by the clock.
+  the queue must stay honest against the audio clock. `expand_keys` rounds the key count up
+  to whole slots and then the timeline up to whole output frames, so a timeline can run past
+  its audio by **up to one slot plus one frame** (116.7 ms worst case at 12/s @ 30 fps;
+  measured 87 ms on `test_audio.flac`) — exposed as `Utterance.tail` and simply never reached
+  by the clock, which is the right outcome: the tail is a held final pose, and latching one
+  is forbidden.
 
 **Measured through the runtime on `test_audio.flac` (7.68 s):** analysis **13–18 ms**
 (~1.7–2.4 ms per second of speech, all of it before playback), 233 frames, 93 poses. At
@@ -696,6 +699,8 @@ tests/test_pipeline.py      86 tests pinning the inter-stage contracts
 tests/test_runtime.py       32 tests pinning the component API's contracts
 tests/test_bake.py          5 tests pinning manifest/buffer consistency at every bake scale
 tests/test_sync.py          11 tests pinning the timing geometry (one-frame center lead, jitter)
+tests/test_playback_loop.py 8 tests driving the queue from a fake output callback: seam
+                            boundaries, no missed frames, gaps idle, prune does not drift
 tests/fixtures/headaudio_distances_oracle.csv   JS-computed distance matrix (accuracy oracle)
 build/                      all generated artefacts, regenerable
 ```
@@ -782,7 +787,7 @@ The model file is vendored in `model/` — if it ever goes missing, refetch per
 > is the plan for the host; `viseme-mouth-plan.md` is the animation component's own plan.
 >
 > Verify before doing anything else, in the animation repo:
-> `.venv/bin/python -m unittest discover -s tests -t .` should report **128 tests, OK**. Two
+> `.venv/bin/python -m unittest discover -s tests -t .` should report **147 tests, OK**. Two
 > generated assets must exist and **`build/` is gitignored, so a fresh clone has neither**:
 > `build/visemes_pixel/visemes.npz` — the 576x432 nearest bake that `holly.DEFAULT_BUFFERS`
 > points at, re-created with `tools/export_visemes.py --scale 0.5 --resample nearest --out
@@ -815,6 +820,10 @@ The model file is vendored in `model/` — if it ever goes missing, refetch per
 >   `sounddevice.OutputStream`, and derive `t` from the frames the output callback has actually
 >   consumed (`t = frames_played / samplerate`). Exit: mouth is in sync by eye, idle is zero-draw,
 >   only the 168x132 rect is ever blitted, and the mouth returns to rest when the queue drains.
+>   `tests/test_playback_loop.py` is the worked model of exactly that loop, with the device
+>   faked: a monotonic frame counter polled at 60 Hz, asserted to reach every reachable frame,
+>   never sample past an utterance's audio, stay idle in the gaps, and not drift when played
+>   utterances are pruned. Port its assertions into the host's own test rather than re-deriving them.
 > - **A1 — text to speech.** Type arbitrary text -> stock Piper voice -> `speak()` -> same sync.
 >
 > Two things about that boundary that are easy to get wrong. **(1)** `analyse()` *raises* unless

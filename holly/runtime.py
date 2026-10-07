@@ -98,9 +98,10 @@ class Utterance:
 
     `start`/`audio_duration` are in seconds on the host's playback clock and are what
     the queue advances by, so the face stays locked to the audio output position even
-    when utterances are queued back-to-back. `weights` can run a hair longer than the
-    audio (the final pose slot is rounded up to the key grid); those tail frames are
-    simply never reached when the next utterance starts on the audio clock.
+    when utterances are queued back-to-back. `weights` can run past the audio by up to
+    one pose slot plus one output frame (the key count is rounded up to whole slots, then
+    the timeline up to whole frames); those tail frames are simply never reached, because
+    the clock is the audio and the audio has ended.
     """
 
     index: int
