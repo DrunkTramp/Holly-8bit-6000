@@ -1,4 +1,4 @@
-# Handoff: Phase 2 (HeadAudio classifier port) is done; Phase 3 (live animation runtime, app-audio driven) is next
+# Handoff: Phase 3a (component API + reference player) is done; the host application is next
 
 Paste the **Kickoff prompt** at the bottom into a new session. Everything above it
 is state that session needs and cannot infer from the code alone.
@@ -15,10 +15,12 @@ model. The original continuous-100fps plan is preserved as `viseme-mouth-plan.v1
 | 1b — keyframed/cartoon retiming | **Done**, 12/s @ 30 fps settled. `holly/keyframes.py` |
 | renderer cost fix | **Done.** 61.9 -> 1.77 ms/draw, float32. `holly/render.py` |
 | 2 — port HeadAudio classifier to Python | **Done.** `holly/classify.py::HeadAudioClassifier`; front end re-matched first. |
-| 3 — live animation runtime (app-audio) | Not started. This is the next task. Re-scoped 2026-10-07 — see "Change of brief: Phase 3 is not a mic loop". |
+| 3a — component API + reference player | **Done (2026-10-07).** `holly/runtime.py::HollyFace` — `speak()`/`row_at()`/`frame_at()` — plus `tools/reference_player.py`. See "Phase 3a". |
+| host groundwork — `--resample nearest`, 576x432 settled, `pip install -e .` | **Done (2026-10-07).** `pyproject.toml`, `tests/test_bake.py`; a latent mouth-rect bug in every scaled bake was found and fixed. See "Scaled bakes". |
+| 3b — streaming-TTS refactor | Not started, **conditional**: build it only if the host adopts chunked TTS that plays as it arrives. |
 | 4 — polish (idle micro-motion, gain curves) | Not started |
 
-86 tests pass: `.venv/bin/python -m unittest discover -s tests -t .`
+128 tests pass: `.venv/bin/python -m unittest discover -s tests -t .`
 
 ## Change of brief: Phase 3 is not a mic loop (2026-10-07, later)
 
@@ -65,6 +67,94 @@ Consequences, all recorded where they matter:
 - The streaming refactor (per-frame stateful VAD counters, vote ring, pre-emphasis carry)
   is **deferred to a conditional 3b** — build it only if the host's TTS genuinely streams
   chunks that play as they arrive. 3a (buffer-first) is most of a normal TTS integration.
+
+## Phase 3a: the component API and the reference player (2026-10-07)
+
+`holly/runtime.py` is the whole deliverable: a host-agnostic class with no windowing,
+audio-device or microphone dependency, holding the three things the runtime model needs.
+
+```python
+face = HollyFace(renderer=Renderer(DEFAULT_BUFFERS))   # 576x432 nearest bake; renderer optional
+face.speak(tts_buffer, 16000)                 # analyse now, enqueue on the face clock
+frame, rect, changed = face.frame_at(t)       # t = the host's audio output position
+if changed:
+    blit(frame, rect)                         # mouth rect only
+```
+
+- **`speak(samples, rate=16000, *, at=None) -> Utterance`** — buffer in, no file, no
+  ffmpeg, no JSON round trip. Queues back-to-back by default; `at=` places an utterance
+  explicitly (and rejects overlap — the renderer has one mouth).
+- **`row_at(t) -> (15,)`** — never None: outside any utterance it returns `IDLE_ROW`,
+  the base pose alone. **This is the no-final-pose-latch rule, enforced in the core** so
+  no host has to remember it. `frame_index_at(t)` is `-1` in the same territory.
+- **`frame_at(t) -> (frame, mouth_rect, changed)`** — the dirty check lives here: the row
+  is compared against the last row drawn, and `changed=False` means blit nothing. Idle is
+  therefore a true zero-draw state, with exactly one draw to restore the base mouth when
+  an utterance ends.
+- **Sample-rate contract is a hard error, not a silent resample.** The HeadAudio front end
+  is pinned to 16 kHz mono float32, so `analyse()` raises for anything else and tells the
+  host to keep the native-rate buffer for playback. Analysis and playback buffers must
+  correspond 1:1 in time; the core refuses to be the place where that gets fudged.
+- Utterance `audio_duration` (not timeline length) is what the queue advances by, because
+  the queue must stay honest against the audio clock. `expand_keys` rounds the last slot
+  up, so a timeline can run up to one slot past its audio — exposed as `Utterance.tail`
+  (measured 87 ms on `test_audio.flac`) and simply never reached by the clock.
+
+**Measured through the runtime on `test_audio.flac` (7.68 s):** analysis **13–18 ms**
+(~1.7–2.4 ms per second of speech, all of it before playback), 233 frames, 93 poses. At
+the player's 60 Hz poll: **461 polls -> 127 draws, 334 skips** (27.5% of polls cost a
+draw, 16.5 draws/s of speech). **60 s of idle polls: 0 draws.** These are the three
+claims the phase existed to prove.
+
+`tools/reference_player.py` is the only file in the repo that touches pygame, and it is
+the eyeball harness for all future tuning: it mirrors `make_timeline.py`'s flags
+(`--key-hz/--render-fps/--fade-s/--fade-shape/--pool/--sticky/--no-gain`), takes repeated
+`--audio` to queue several utterances with `--gap` silence between them, and blits **only
+the mouth rect** (`pygame.display.update(rect)`). The clock is `mixer.music.get_pos()`,
+not `time.time()`; the loop refuses to jump the clock before the mixer has spun up, and
+sets it past the end once the queue drains so the return-to-rest path is exercised.
+
+### Scaled bakes, nearest-neighbour, and a bug that only scaled buffers had (2026-10-07)
+
+`tools/export_visemes.py` gained `--resample {bilinear,nearest}` (default `bilinear`, so the
+existing behaviour is untouched), recorded as `manifest["resample"]`.
+
+Measured on the base layer, nearest versus a proper area downsample (`BOX`): mean deviation
+**0.61/255 at 1/2** and **0.53/255 at 1/3**, with 2.1% / 1.3% of pixels off by more than 8.
+So for *this* asset the filter choice is nearly a no-op — the source is already blocky pixel
+art, and nearest's real virtue is that it never invents an intensity the palette lacks
+(`tests/test_bake.py` asserts exactly that subset property).
+
+Baking at 0.5 then crashed `Renderer._over`: `(133,168,3)` against `(132,168,1)`. The cause
+was in the manifest, not the renderer — `bake()` built the scaled mouth rect by rounding
+**each edge independently**, while `resize()` rounds the **product**: `round(265 * 0.5) = 132`
+but `round((y1+1)*0.5) - round(y0*0.5) = 133`. The rect now comes from the buffers that were
+actually produced. This had never been caught because nothing in the offline pipeline ever
+loaded a scaled bake — `build/visemes_half/` shipped with the same wrong rect. `tests/test_bake.py`
+pins the invariant across scales (1.0, 0.5, 1/3, 0.7, 2.0) and constructs a real `Renderer`
+from each bake, which is the host's actual entry condition.
+
+Baked and verified through `HollyFace` (identical 233 frames / 107 draws at every size — the
+timeline is resolution-independent, as it must be). Cost per `draw_row`, median of 233 draws:
+
+| buffers | canvas | mouth rect | px/draw | ms/draw | core @ 12 draws/s |
+|---|---|---|---|---|---|
+| `build/visemes/` (native, offline tools) | 1152x864 | 335x265 | 88,775 | 2.84–3.06 | ~3.5% |
+| **`build/visemes_pixel/` (the host asset)** | **576x432** | **168x132** | **22,176** | **0.71–0.73** | **~0.86%** |
+| `build/visemes_third/` | 384x288 | 112x88 | 9,856 | 0.33–0.34 | ~0.40% |
+| `build/visemes_half/` | 576x432 | 168x132 | 22,176 | — | bilinear, re-baked with the fix |
+
+**Settled (2026-10-07): the host canvas is 576x432**, because the face sits in a *corner* of
+the host UI rather than filling a window — and the mouth rect is the only thing a host ever
+blits, so halving the linear size quarters the per-draw cost. `holly.runtime.DEFAULT_BUFFERS`
+now points at `build/visemes_pixel/visemes.npz` (nearest, 0.5), with `NATIVE_BUFFERS` kept for
+the debug filmstrip. End-to-end at the player's 60 Hz poll over `test_audio.flac`: **1.52% of
+one core sustained** at 576x432 against 4.66% at native, same 107 draws. `tests/test_runtime.py
+::TestHostBake` pins the size, the manifest's `nearest`/`0.5`, and the 4x rect ratio.
+
+These ms figures are medians measured on this box across the whole `draw_row` call; the
+earlier recorded **1.77 ms/draw** was the mouth-rect work at native under a different
+harness. The decision-relevant number is the ratio, which is exactly the pixel count.
 
 ## Phase 2: HeadAudio classifier port (2026-10-07)
 
@@ -541,16 +631,21 @@ the old path.
 ## File map
 
 ```
+holly-host-plan.md          the LARGER project: LLM + TTS + this component, phased A-E
 viseme-mouth-plan.md        plan of record (keyframe timing + on-demand runtime model)
 viseme-mouth-plan.v1.md     original continuous-100fps plan, preserved
-requirements.txt            build-time deps pinned; runtime deps commented out
+requirements.txt            build-time deps pinned; runtime deps now live in pyproject.toml
+pyproject.toml              `pip install -e .` -> `import holly`; extras: build, player
 model/model-en-mixed.bin    HeadAudio prototypes (MIT; see model/README.md)
 model/README.md             provenance + fetch commands for the vendored model files
-tools/export_visemes.py     Phase 0: audit PSD, validate spec, bake premultiplied buffers
+tools/export_visemes.py     Phase 0: audit PSD, validate spec, bake premultiplied buffers.
+                            `--scale` + `--resample {bilinear,nearest}` for pixel-art bakes
 tools/make_timeline.py      Phase 1+1b+2: audio -> timeline JSON (headaudio by default)
 tools/render_filmstrip.py   Phase 1: timeline -> strip.png + muxed visemes.mp4
 tools/sweep_phase2.py       Phase 2 tuning sweep: sticky/pool/fade-shape/sil-sensitivity A/B
 tools/diagnose_phase2.py    Phase 2b: accuracy/distance/VAD-gate diagnostics vs the embedded transcript
+tools/reference_player.py   Phase 3a: standalone pygame player -- the sync proof and the tuning
+                            harness. The ONLY file that imports pygame; the core never does.
 holly/vise.py               canonical 15 visemes, index map
 holly/audio.py              ffmpeg decode to 16 kHz mono f32, framing, rms
 holly/features.py           HeadAudio-matched mel/MFCC front end, pure numpy (see Phase 2 section)
@@ -560,7 +655,11 @@ holly/keyframes.py          pose pooling, sticky hysteresis, frame-quantised cro
 holly/smooth.py             attack/release envelopes (continuous mode only), normalize_weights
 holly/timeline.py           timeline JSON format + IO
 holly/render.py             mouth-rect-only cross-fade renderer
+holly/runtime.py            Phase 3a: HollyFace -- speak()/row_at()/frame_at(), the utterance
+                            queue, the dirty check, IDLE_ROW. No windowing or audio deps.
 tests/test_pipeline.py      86 tests pinning the inter-stage contracts
+tests/test_runtime.py       32 tests pinning the component API's contracts
+tests/test_bake.py          5 tests pinning manifest/buffer consistency at every bake scale
 tests/fixtures/headaudio_distances_oracle.csv   JS-computed distance matrix (accuracy oracle)
 build/                      all generated artefacts, regenerable
 ```
@@ -568,11 +667,17 @@ build/                      all generated artefacts, regenerable
 ## Reproduce everything
 
 ```sh
-.venv/bin/pip install -r requirements.txt
+.venv/bin/pip install -e .                 # the host does the same; then `import holly`
 .venv/bin/python tools/export_visemes.py --preview build/preview/baked_sheet.jpg
+.venv/bin/python tools/export_visemes.py --scale 0.5 --resample nearest --out build/visemes_pixel
 .venv/bin/python tools/make_timeline.py --audio test_audio.flac
 .venv/bin/python tools/render_filmstrip.py --audio test_audio.flac --video build/debug/visemes.mp4
 .venv/bin/python -m unittest discover -s tests -t .
+
+# Phase 3a reference player (needs the optional pygame; the core does not):
+.venv/bin/pip install pygame==2.6.1
+.venv/bin/python tools/reference_player.py --audio test_audio.flac
+.venv/bin/python tools/reference_player.py --audio a.wav --audio b.wav --gap 0.4 --scale 2
 ```
 
 The model file is vendored in `model/` — if it ever goes missing, refetch per
@@ -599,11 +704,29 @@ The model file is vendored in `model/` — if it ever goes missing, refetch per
   is valid live. `visemes_keys12_lag.mp4` is now just a preview of an alternative shape.
 - hop 256 (62.5 fps) or hop 160 (100 fps) for analysis. Keyframing makes this much less
   important; HeadAudio itself runs 62.5 fps and the prototypes expect it.
-- Bake at native 1152x864 or `--scale 0.5` for the target low-end hardware. The user is
+- ~~Bake at native 1152x864 or `--scale 0.5` for the target low-end hardware. The user is
   moving toward a **retro pixel-art style**, which likely means nearest-neighbour scaling
-  rather than the bilinear used today — not yet specified or implemented.
+  rather than the bilinear used today — not yet specified or implemented.~~ **Settled
+  (2026-10-07):** `--resample {bilinear,nearest}` exists, and the host bakes at **576x432
+  nearest**. See "Scaled bakes" above for what nearest actually buys and for the rect bug
+  it exposed.
 - ~~`--sticky` 0.05 and `--pool mean` are untested against a real classifier~~ **Swept**
   (`tools/sweep_phase2.py`): keep `mean` (max is degenerate for one-hot); sticky see above.
+- ~~**Bake size for the host (blocks host-plan Phase A)**~~ **Settled: 576x432, nearest.**
+  With a correction to the plan: "384x288 = half of 1152x864" is wrong — half is **576x432**;
+  384x288 is a **third** (`--scale 0.3333333333`). The face is a corner element of the host UI,
+  so the smaller mouth rect wins: 22,176 px/draw against 88,775, measured 0.72 ms against
+  ~2.9 ms, 1.52% against 4.66% of a core at a 60 Hz poll. `holly.runtime.DEFAULT_BUFFERS` is
+  now `build/visemes_pixel/visemes.npz`; `NATIVE_BUFFERS` stays for the debug filmstrip, and
+  `build/visemes_third/` remains if a tighter corner is ever wanted.
+- ~~**Handoff shape is now a live question**~~ **Settled by the API, not by argument.**
+  `HollyFace.frame_at()` returns exactly `(frame, mouth_rect, changed)` — the standing
+  mouth-rect recommendation — and `row_at()` stays available for a host that wants to own
+  compositing. The core is committed to neither.
+- **NEW: repo boundary settled.** The host consumes this repo as `pip install -e
+  Holly-8bit-6000` (`pyproject.toml`, package `holly`), not as a submodule with path
+  surgery. `holly.DEFAULT_BUFFERS`/`DEFAULT_MODEL` resolve against the repo root rather than
+  the process CWD, so `import holly` behaves identically from the host's own directory.
 - ~~Phase 3 VAD levels: measure real mic levels~~ **Moot** — no mic. The auto le-gate is
   tuned on the host's own clean output; revisit only if 3b meets noisy streams.
 - ~~Fix `Renderer.draw_row`'s 68 ms full-canvas unpremultiply~~ **Done: 1.77 ms/draw, 10.8 MB.**
@@ -614,51 +737,89 @@ The model file is vendored in `model/` — if it ever goes missing, refetch per
 
 ## Kickoff prompt
 
-> Continue the Holly viseme project at `/home/irreverend/Projects/Holly`. Read
-> `HANDOFF.md` first — it is the authoritative state record and cannot be inferred from
-> the code alone. Phases 0, 1, 1b, the renderer cost fix, and **Phase 2 (HeadAudio
-> classifier port)** are complete and tested; `viseme-mouth-plan.md` is the plan of
-> record. The original continuous-100fps plan is preserved as `viseme-mouth-plan.v1.md`.
+> Start the **Holly host application** in a new repo alongside the animation component at
+> `/home/irreverend/Projects/Holly`, consuming it as `pip install -e
+> /home/irreverend/Projects/Holly` and then `import holly` (settled 2026-10-07 — not a
+> submodule, no `sys.path` surgery). Read that repo's `HANDOFF.md` first: it is the
+> authoritative state record and cannot be inferred from the code alone. `holly-host-plan.md`
+> is the plan for the host; `viseme-mouth-plan.md` is the animation component's own plan.
 >
-> Verify before doing anything else: `.venv/bin/python -m unittest discover -s tests -t .`
-> should report **86 tests, OK**, and `build/visemes/visemes.npz` + `model/model-en-mixed.bin`
-> should already exist (regenerate/refetch per `tools/export_visemes.py` and `model/README.md`).
+> Verify before doing anything else, in the animation repo:
+> `.venv/bin/python -m unittest discover -s tests -t .` should report **128 tests, OK**. Two
+> generated assets must exist and **`build/` is gitignored, so a fresh clone has neither**:
+> `build/visemes_pixel/visemes.npz` — the 576x432 nearest bake that `holly.DEFAULT_BUFFERS`
+> points at, re-created with `tools/export_visemes.py --scale 0.5 --resample nearest --out
+> build/visemes_pixel` — and `model/model-en-mixed.bin` (refetch per `model/README.md`).
 >
-> Do **Phase 3: the live animation runtime, driven by the application's own audio**.
-> The brief was clarified 2026-10-07: Holly animates to audio **the host plays** (TTS
-> buffer/file). The microphone is out of scope — the old "real-time mic loop" framing,
-> the ~115 ms latency floor, the `--fade-shape lag` requirement, and the
-> `sounddevice`/`libportaudio2` deps are all **retired** (see "Change of brief: Phase 3
-> is not a mic loop"). Integration model **confirmed**: the main project generates whole
-> TTS utterances, then plays them with the avatar in time — build **3a**, skip the
-> streaming refactor unless the host later adopts chunked TTS. Concretely: accept a whole
-> utterance buffer -> run the existing pipeline in memory (no JSON round trip needed;
-> ~30 ms per 7.7 s utterance, done before playback) -> sample poses against the host's
-> playback-position clock (`frame = audio_time * 30`) -> **dirty-check** each weight row
-> against the last drawn one and skip when equal -> idle is a true zero-draw state on the
-> base layer -> **do not latch the final pose** when the utterance ends. Because analysis
-> runs ahead of playback, the auto `le` percentile gate and `center` fade — the shipped
-> `visemes.mp4` look — are valid as-is. **The host app does not exist yet** (this repo is
-> the animation component of a future project), so the deliverable is a host-agnostic
-> component API (pure numpy in/out — `speak(samples) -> timeline`, `row_at(audio_time)`)
-> PLUS a standalone pygame reference player that proves sync, dirty-check, zero-draw idle
-> and no final-pose latching, and doubles as the tuning harness. The handoff shape
-> (callback / mouth-rect buffer / full frame) is deferred until the main project picks its
-> stack — do not pre-commit the core to any of them. Keep the batch classifier contract
-> intact — the offline tools and tests depend on it.
+> **The animation component is finished — do not rebuild or re-architect it.** Phase 3a is
+> the whole host-facing surface:
+>
+> ```
+> face = HollyFace(renderer=Renderer(DEFAULT_BUFFERS))   # or row_at(t) and composite yourself
+> face.speak(tts_16k_float32)                            # analysis ~13-18 ms per 7.7 s, before playback
+> frame, rect, changed = face.frame_at(t)                # t = audio output position, never time.time()
+> if changed: blit(frame, rect)                          # 168x132 px at the host bake, 0.72 ms
+> ```
+>
+> The dirty check, the zero-draw idle and the no-final-pose-latch rule (`IDLE_ROW` outside
+> speech) all live in the core — the host must not reimplement them, and must not latch a
+> final pose when it thinks an utterance is over. `tools/reference_player.py` is the working
+> example of a consumer plus the tuning harness; read it before writing the host's render loop.
+>
+> **Phase A (the task): the host skeleton, no LLM.** pygame window with the face in a corner,
+> keyboard input line, `sounddevice` output, an utterance queue, and the playback clock driving
+> `frame_at()`. Suggested order, because the first step needs no TTS at all:
+>
+> - **A0 — clock proof.** Queue `test_audio.flac` twice with a gap, play it through one
+>   `sounddevice.OutputStream`, and derive `t` from the frames the output callback has actually
+>   consumed (`t = frames_played / samplerate`). Exit: mouth is in sync by eye, idle is zero-draw,
+>   only the 168x132 rect is ever blitted, and the mouth returns to rest when the queue drains.
+> - **A1 — text to speech.** Type arbitrary text -> stock Piper voice -> `speak()` -> same sync.
+>
+> Two things about that boundary that are easy to get wrong. **(1)** `analyse()` *raises* unless
+> the buffer is 16 kHz mono float32 — by design, because the HeadAudio front end is pinned to it.
+> Resample on the host side and keep the native-rate buffer for playback. The clock still lines up
+> at two rates because the queue advances by **duration**, not sample count: 16k and 22.05k
+> buffers of the same audio are the same number of seconds. **(2)** Keep analysis and playback
+> buffers 1:1 in time — resample once, keep both, never re-derive one from the other.
+>
+> Constraints the host must not break, carried over from the Phase 3 re-scope: the
+> microphone is out of scope entirely (the ~115 ms latency floor, the `--fade-shape lag`
+> rule and the `sounddevice`-for-input framing are retired — `sounddevice` in the host is
+> *output only*); analysis always runs ahead of playback, so the auto `le` percentile gate
+> and `center` fade are valid live; the streaming refactor stays a conditional **3b** until
+> the host adopts chunked TTS; and keep the batch classifier contract intact — the offline
+> tools and the tests both depend on it.
 >
 > Do **not** re-tune `holly/features.py` toward "nicer" MFCC defaults: every parameter is
 > pinned to HeadAudio's front end because the shipped prototypes were trained on it (the
 > audit table in `HANDOFF.md` Phase 2 section lists all of them). Analysis cost is
 > ~0.06 ms/frame total — well inside the 1 ms budget; keep it there.
 >
-> Two things not to re-litigate, both measured and recorded: the renderer costs
-> **~1.8 ms/draw** (float32 + mouth-rect + no-gather), and the pose rate is settled at
-> **`--key-hz 12` @ 30 fps**.
+> Settled, not to be re-litigated — all measured and recorded:
+> **576x432 nearest** is the host bake (the face is a corner element; halving the linear size
+> quarters the mouth-rect blit: 22,176 px / 0.72 ms against 88,775 px / 2.84-3.06 ms at native,
+> 1.52% against 4.66% of one core at a 60 Hz poll). Pose rate **`--key-hz 12` @ 30 fps**.
+> Analysis **~0.06 ms/frame**. The renderer's **1.77 ms/draw** figure in the sections above was
+> the mouth-rect work at native under a different harness; the numbers in this paragraph are
+> medians over the whole `draw_row` on this box — the ratio is the decision-relevant part.
+> The shipping driver is the real classifier with the auto `le` gate + display gain — exactly
+> `build/debug/visemes.mp4`, and the zero-flag default of both `make_timeline.py` and
+> `HollyFace`. The pre-pooling eased variant was rejected by eye — do not resurrect it.
 >
-> The shipping driver and configuration are **settled** (user, 2026-10-07): the real
-> classifier with the auto `le` gate + display gain — exactly `build/debug/visemes.mp4`,
-> which is also the zero-flag default of `tools/make_timeline.py`. The runtime uses the
-> same defaults; with buffer-first analysis the whole-file percentile gate is valid
-> as-is (no running noise-floor estimate — that was a mic-era requirement). The
-> pre-pooling eased variant was rejected by eye — do not resurrect it.
+> Still open, in rough priority order — none of these block Phase A:
+>
+> - **Sync has never been judged by ear.** `tools/reference_player.py` was only ever run
+>   headless on SDL's dummy audio, which drains the buffer faster than realtime. That proves
+>   the code path, the clock mapping and the blit counts — not that the mouth *looks* locked
+>   to the voice. Run it with a real device (`--audio test_audio.flac`) as the first act of
+>   Phase A, before writing host code that depends on the component being right.
+> - **`2,3,3,2` hold-length swing at 12/s @ 30 fps** — decide by eye in the live host; fall
+>   back to `--key-hz 10` (uniform grid) if it reads as a limp.
+> - **Classifier behaviour on synthetic speech** — TTS output is cleaner than the human
+>   speech the HeadAudio prototypes were trained on, but prosody differs. Test each voice
+>   with `tools/render_filmstrip.py` / the reference player; if a voice gives poor visemes the
+>   fix is the classifier's gate/gain knobs, never the renderer.
+> - **3b streaming-TTS refactor** — only if the host adopts chunked TTS that plays as it arrives.
+> - **Phase 4 polish** — idle micro-motion, per-viseme gain curves.
+> - **Red Dwarf LoRA** for the LLM — its own side project; the host code does not change for it.

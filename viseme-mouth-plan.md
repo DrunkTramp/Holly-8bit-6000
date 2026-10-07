@@ -201,7 +201,11 @@ still there.
 - **Phase 1 — offline proof.** **Done.** One WAV/FLAC -> timeline JSON -> debug filmstrip + muxed video with waveform band and playhead, so A/V offset is visible.
 - **Phase 1b — cartoon keyframe retiming.** **Done.** `holly/keyframes.py`. Replaces the attack/release envelope model for the default path; `--continuous` keeps the old one for A/B.
 - **Phase 2 — port HeadAudio classifier.** **Done** (2026-10-07, + 2b look fixes). Front-end diff found 10/18 parameters mismatched; `features.py` rebuilt to mirror HeadAudio exactly. `HeadAudioClassifier` parses the model (phoneme->viseme map embedded in record headers), Mahalanobis argmin, silSensitivity, vote ring, log-energy VAD; verified against HeadAudio's own JS distance oracle. Shipping config chosen by the user = the zero-flag default (`visemes.mp4`).
-- **Phase 3 — live animation runtime (app-audio driven).** Re-scoped 2026-10-07: the
+- **Phase 3 — live animation runtime (app-audio driven).** **3a Done (2026-10-07).**
+  `holly/runtime.py::HollyFace` (`speak`/`row_at`/`frame_at`) + `tools/reference_player.py`;
+  32 contract tests in `tests/test_runtime.py`. Measured through the runtime on
+  `test_audio.flac`: 13–18 ms analysis per 7.68 s utterance, 27.5% of 60 Hz polls cost a
+  draw, 0 draws across 60 s of idle. Re-scoped 2026-10-07: the
   mouth animates to audio **the host plays** (TTS buffer/file), never to a microphone.
   Integration model confirmed: the main project generates whole TTS utterances, then
   plays them with the avatar in time — so **3a precompute is the path and 3b streaming

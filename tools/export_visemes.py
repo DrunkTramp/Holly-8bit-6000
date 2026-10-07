@@ -205,16 +205,29 @@ def premultiply(rgba: np.ndarray) -> np.ndarray:
     return out
 
 
-def resize_premultiplied(rgba: np.ndarray, scale: float) -> np.ndarray:
+# Resampling filters for the `--scale` path. `nearest` is the pixel-art option: it
+# copies source pixels instead of blending them, so the 8-bit blockiness survives the
+# downscale and the premultiplied invariant is preserved exactly (every output pixel is
+# a verbatim input pixel, which no blending filter can promise).
+RESAMPLE_FILTERS = {
+    "bilinear": Image.Resampling.BILINEAR,
+    "nearest": Image.Resampling.NEAREST,
+}
+RESAMPLE_DEFAULT = "bilinear"
+
+
+def resize_premultiplied(rgba: np.ndarray, scale: float, resample: str = RESAMPLE_DEFAULT) -> np.ndarray:
     """Resize premultiplied RGBA.
 
     Both the colour and alpha planes are resampled with the same filter, which
     is the correct operation on premultiplied data and avoids the dark fringes
     you get by resizing straight-alpha colour against an independent alpha.
     """
+    if resample not in RESAMPLE_FILTERS:
+        raise ValueError(f"unknown resample {resample!r}, expected one of {sorted(RESAMPLE_FILTERS)}")
     height, width = rgba.shape[:2]
     new_size = (max(1, round(width * scale)), max(1, round(height * scale)))
-    img = Image.fromarray(np.rint(rgba).astype(np.uint8), "RGBA").resize(new_size, Image.Resampling.BILINEAR)
+    img = Image.fromarray(np.rint(rgba).astype(np.uint8), "RGBA").resize(new_size, RESAMPLE_FILTERS[resample])
     return np.array(img, dtype=np.float32)
 
 
@@ -226,7 +239,8 @@ def rgba_of(layer: LayerInfo) -> np.ndarray:
     return np.array(image.convert("RGBA"), dtype=np.uint8)
 
 
-def bake(psd: PSDImage, layers: list[LayerInfo], scale: float, margin: int) -> dict:
+def bake(psd: PSDImage, layers: list[LayerInfo], scale: float, margin: int,
+         resample: str = RESAMPLE_DEFAULT) -> dict:
     canvas = (psd.width, psd.height)
     rect = crop_rect(layers, canvas, margin)
     x0, y0, x1, y1 = rect
@@ -245,15 +259,18 @@ def bake(psd: PSDImage, layers: list[LayerInfo], scale: float, margin: int) -> d
         patches.append(premultiply(cropped))
 
     if scale != 1.0:
-        base = resize_premultiplied(base, scale)
-        patches = [resize_premultiplied(p, scale) for p in patches]
+        base = resize_premultiplied(base, scale, resample)
+        patches = [resize_premultiplied(p, scale, resample) for p in patches]
         origin = (int(round(x0 * scale)), int(round(y0 * scale)))
-        rect = (
-            origin[0],
-            origin[1],
-            max(0, int(round((x1 + 1) * scale)) - 1),
-            max(0, int(round((y1 + 1) * scale)) - 1),
-        )
+        # w/h come from the buffers that were actually produced, never from rounding the
+        # two rect edges independently: `resize` rounds the *product* (265 * 0.5 -> 132),
+        # while rounding each edge can give 133, and a manifest rect that disagrees with
+        # the patch shape makes Renderer._over() fail to broadcast.
+        if patches:
+            ph, pw = patches[0].shape[:2]
+        else:
+            ph, pw = max(1, round((y1 - y0 + 1) * scale)), max(1, round((x1 - x0 + 1) * scale))
+        rect = (origin[0], origin[1], origin[0] + pw - 1, origin[1] + ph - 1)
         canvas = (base.shape[1], base.shape[0])
     else:
         origin = (x0, y0)
@@ -266,6 +283,7 @@ def bake(psd: PSDImage, layers: list[LayerInfo], scale: float, margin: int) -> d
         "source_canvas": {"width": psd.width, "height": psd.height},
         "render_canvas": {"width": canvas[0], "height": canvas[1]},
         "render_scale": scale,
+        "resample": resample if scale != 1.0 else "none",
         "mouth_rect": {"x": rect[0], "y": rect[1], "w": rect[2] - rect[0] + 1, "h": rect[3] - rect[1] + 1},
         "alpha": "premultiplied",
         "dtype": "uint8",
@@ -373,7 +391,15 @@ def main(argv: list[str] | None = None) -> int:
         "--scale",
         type=float,
         default=1.0,
-        help="Render resolution multiplier. Use 0.5 to halve linear pixels on a weak CPU.",
+        help="Render resolution multiplier. Use 0.5 for a 384x288 canvas on a weak CPU.",
+    )
+    parser.add_argument(
+        "--resample",
+        choices=sorted(RESAMPLE_FILTERS),
+        default=RESAMPLE_DEFAULT,
+        help="Filter used by --scale. `nearest` keeps the pixel-art blockiness and is the "
+             "right choice for a retro look; `bilinear` (default) is what the shipped "
+             "build/visemes_half buffers were baked with.",
     )
     parser.add_argument("--margin", type=int, default=2, help="Padding around the mouth crop, in source pixels.")
     parser.add_argument("--preview", type=Path, default=None, help="Write a contact sheet of the baked buffers here.")
@@ -413,7 +439,7 @@ def main(argv: list[str] | None = None) -> int:
         layers = [l for l in layers if l.code in VISEMES]
         print("\ncontinuing with a partial set (--allow-missing)\n", file=sys.stderr)
 
-    baked = bake(psd, layers, args.scale, args.margin)
+    baked = bake(psd, layers, args.scale, args.margin, args.resample)
 
     # Validate the asset at native resolution. Downscaling shifts the bilinear
     # sample grid by up to half a pixel relative to resizing the whole composite,
@@ -437,7 +463,7 @@ def main(argv: list[str] | None = None) -> int:
     print("baked")
     rect = baked["manifest"]["mouth_rect"]
     canvas = baked["manifest"]["render_canvas"]
-    print(f"  render canvas   {canvas['width']}x{canvas['height']} (scale {args.scale})")
+    print(f"  render canvas   {canvas['width']}x{canvas['height']} (scale {args.scale}, {args.resample})")
     print(f"  mouth rect      x={rect['x']} y={rect['y']} {rect['w']}x{rect['h']}"
           f"  ({rect['w'] * rect['h'] / (canvas['width'] * canvas['height']):.1%} of canvas)")
     print(f"  base buffer     {baked['base'].shape}  {baked['base'].nbytes / 1e6:.2f} MB")

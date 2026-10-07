@@ -1,12 +1,18 @@
-# Build-time: tools/export_visemes.py (Phase 0). Versions verified on this machine.
+# This repo is a package now: `pyproject.toml` holds the real dependency story.
+#
+#   .venv/bin/pip install -e .                 # runtime: numpy only, gives you `import holly`
+#   .venv/bin/pip install -e .[build]          # + psd-tools/pillow to bake buffers from the PSD
+#   .venv/bin/pip install -e .[player]         # + pygame for tools/reference_player.py
+#
+# The file below is kept so a bare `pip install -r requirements.txt` still reproduces the
+# build environment on a fresh box. Versions verified on this machine (Python 3.12.3).
 psd-tools==1.24.0
 numpy==2.5.3
 pillow==12.3.0
-
-# Runtime host: pygame is OPTIONAL, only for a standalone test window (Phase 3a);
-# the real host application may already own the surface to draw into.
-# pygame==2.6.1
+pygame==2.6.1
 
 # NOT needed: sounddevice/libportaudio2. The Phase 3 re-scope (2026-10-07) retired the
-# mic loop — Holly animates to the host's own audio output, never a microphone.
-# sounddevice==0.5.1
+# mic loop — Holly animates to the host's own audio output, never a microphone. The
+# reference player uses pygame's mixer for the same reason: one library, no portaudio.
+# The *host* application (holly-host-plan.md) may well want sounddevice for its own
+# output callback; that is the host's dependency, not this repo's.
