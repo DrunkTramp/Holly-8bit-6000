@@ -27,7 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from holly.runtime import HollyFace
 from holly.vise import BASE_VISEME, VISEMES, VISEME_INDEX
 
-from hollyhost.tts import PiperTTS, prepare
+from hollyhost.tts import PiperVoiceTTS, prepare
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -39,7 +39,7 @@ DEFAULT_SENTENCES = [
 
 
 def analyse_voice(voice: Path, sentences: list[str], face: HollyFace) -> list[dict]:
-    tts = PiperTTS(voice)
+    tts = PiperVoiceTTS(voice)
     out = []
     for text in sentences:
         samples, rate = tts.synthesize(text)

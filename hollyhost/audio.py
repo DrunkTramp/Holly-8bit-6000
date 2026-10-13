@@ -187,6 +187,21 @@ class LiveAudio:
                 self._samples = chunk
             return (self._samples.size - chunk.size) / self.rate
 
+    def flush(self) -> float:
+        """Barge-in: drop everything queued but not yet played. Returns the clock position.
+
+        The buffer is truncated at the *consumed* position, not emptied: the clock stays
+        exactly where the device is, `idle()` becomes true at once, and the next `append`
+        starts at that same frozen position -- so the pinning rule `say()` relies on
+        (face `at` == the byte position the audio landed on) still holds after a cut.
+        The device callback is unaffected: with nothing real left to emit it keeps
+        padding silence and the clock stays frozen, exactly as in the normal idle state.
+        """
+        with self._lock:
+            if self._samples.size > self._fill:
+                self._samples = self._samples[: self._fill]
+            return self._fill / self.rate
+
     # -- the callback -------------------------------------------------------
 
     def emit(self, frames: int) -> tuple[np.ndarray | None, int]:

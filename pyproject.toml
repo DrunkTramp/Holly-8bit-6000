@@ -15,8 +15,14 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-ui = ["pygame==2.6.1"]
+ui = ["pillow>=10"]   # Tk itself is stdlib, but needs the system package: sudo apt install python3-tk
 piper = ["piper-tts>=1.2"]
+omnivoice = ["omnivoice"]   # GPU clone backend; NOT on PyPI. Install the CUDA torch first:
+                             #   uv pip install --python .venv/bin/python \
+                             #       --index-url https://download.pytorch.org/whl/cu128 \
+                             #       torch==2.8.0 torchaudio==2.8.0
+                             # then: uv pip install -e vendor/OmniVoice   (see README)
+llm = ["llama-cpp-python>=0.3"]   # GPU build: see README (CMAKE_ARGS with GGML_CUDA)
 dev = ["pytest>=8"]
 
 [tool.setuptools]

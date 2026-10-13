@@ -122,20 +122,26 @@ class LiveSession:
     the device thread and never sees the face. That is why no lock guards the queue.
     """
 
-    def __init__(self, face: HollyFace, audio, *, gap: float = 0.25, tts=None):
+    def __init__(self, face: HollyFace, audio, *, gap: float = 0.25, tts=None,
+                 normalize: bool = True):
         self.face = face
         self.audio = audio
         self.gap = float(gap)
         self.tts = tts
+        # Phase D: typed text is preprocessed before synthesis too, so the `--brain none` path
+        # speaks clean phonemes just like the chat path. Only affects text we must synthesise;
+        # utterances whose audio already exists (from the pump) pass through untouched.
+        self.normalize = bool(normalize)
 
     def say(self, text: str, samples=None, rate: int | None = None):
         """Queue one utterance. `samples`/`rate` bypass TTS when the caller already has audio."""
+        from .normalize import preprocess
         from .tts import prepare, resample
 
         if samples is None:
             if self.tts is None:
                 raise ValueError("no audio given and no TTS backend on the session")
-            samples, rate = self.tts.synthesize(text)
+            samples, rate = self.tts.synthesize(preprocess(text) if self.normalize else text)
         if rate is None:
             rate = self.audio.rate
 
@@ -147,6 +153,19 @@ class LiveSession:
 
         start = self.audio.append(playback, gap=self.gap)
         return self.face.speak(prepared.analysis, FACE_RATE, at=start)
+
+    def interrupt(self) -> float:
+        """Phase E barge-in: stop playback, drop the face queue, back to idle.
+
+        Order matters: cut the audio first (the clock freezes at the device position),
+        then the face. `HollyFace.reset()` clears the queue *and* the dirty check, so
+        the next `poll()` reports `changed=True` and redraws the mouth at rest exactly
+        once -- the component's own return-to-rest path, not a host-side latch. UI-thread
+        only, like `say`/`poll`.
+        """
+        t = self.audio.flush()
+        self.face.reset()
+        return t
 
     def poll(self) -> tuple[np.ndarray, tuple[int, int, int, int], bool]:
         """Sample the face at the live clock, pruning what has already played.
