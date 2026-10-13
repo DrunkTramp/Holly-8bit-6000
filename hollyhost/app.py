@@ -21,6 +21,7 @@ no libportaudio). The Tk UI itself lives in `tkui.py`.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import time
 from pathlib import Path
@@ -67,6 +68,8 @@ def parse_args(argv=None):
     p.add_argument("--base-url", default="http://127.0.0.1:8080",
                    help="OpenAI-compatible endpoint for --brain http (llama-server, Ollama).")
     p.add_argument("--http-model", default=None, help="Model name for --brain http (llama.cpp ignores it).")
+    p.add_argument("--api-key", default=os.environ.get("OPENAI_API_KEY"),
+                   help="Bearer token for --brain http (default: $OPENAI_API_KEY, if set).")
     p.add_argument("--ctx", type=int, default=2048, help="Context window tokens (keep it small).")
     p.add_argument("--gpu-layers", type=int, default=None,
                    help="GGUF layers to offload (-1 = all). Default comes from the calibration "
@@ -226,7 +229,8 @@ def _build_brain_and_tts(args):
     try:
         brain = make_brain(args.brain, model=args.model, base_url=args.base_url,
                            http_model=args.http_model, ctx=args.ctx, gpu_layers=args.gpu_layers,
-                           max_tokens=args.max_tokens, temperature=args.temp, threads=args.threads)
+                           max_tokens=args.max_tokens, temperature=args.temp, threads=args.threads,
+                           api_key=args.api_key)
     except ImportError as exc:
         print(f"brain {args.brain!r} needs its dependency: {exc}\n"
               f"  (.venv/bin/pip install -e '.[ui,dev,piper,llm]')", file=sys.stderr)
@@ -349,30 +353,39 @@ def _batch_ui(face, device, total: float, args) -> int:
 def run_interactive(args, buffers_path) -> int:
     from holly.render import Renderer
     from holly.runtime import HollyFace
-    from .brain import SentencePump
-
-    brain, tts, err = _build_brain_and_tts(args)
-    if err:
-        return err
-    rate = args.tts_rate or getattr(tts, "rate", SAMPLE_RATE)
-
-    audio = LiveAudio(rate, blocksize=args.blocksize)
-    face = HollyFace(renderer=Renderer(buffers_path), **_face_kwargs(args))
-    session = LiveSession(face, audio, gap=args.gap, tts=tts, normalize=not args.no_normalize)
-
-    # The pump owns the chat thread. It touches the brain and the TTS; it must never touch
-    # `face` or `audio` -- `sentences()` are handed back and put on the clock here, on the
-    # UI thread, which is what keeps the face `at` pinned to the audio position.
-    pump = None
-    if brain is not None:
-        pump = SentencePump(brain, tts, persona=args.persona, max_chars=args.max_chars,
-                            normalize=not args.no_normalize)
-    print(f"interactive: tts={tts.name} @ {rate} Hz, brain={brain.name if brain else 'none'}, "
-          f"mouth rect {face.renderer.mouth_rect}, Esc quits, Enter speaks, Tab/Space stops Holly")
 
     if args.dry:
+        # The rehearsal keeps the eager path: the tests pin the whole headless pipeline, and
+        # there is no window to keep responsive.
+        brain, tts, err = _build_brain_and_tts(args)
+        if err:
+            return err
+        rate = args.tts_rate or getattr(tts, "rate", SAMPLE_RATE)
+
+        audio = LiveAudio(rate, blocksize=args.blocksize)
+        face = HollyFace(renderer=Renderer(buffers_path), **_face_kwargs(args))
+        session = LiveSession(face, audio, gap=args.gap, tts=tts, normalize=not args.no_normalize)
+
+        from .brain import SentencePump
+        pump = None
+        if brain is not None:
+            pump = SentencePump(brain, tts, persona=args.persona, max_chars=args.max_chars,
+                                normalize=not args.no_normalize)
+        print(f"interactive: tts={tts.name} @ {rate} Hz, brain={brain.name if brain else 'none'}, "
+              f"mouth rect {face.renderer.mouth_rect}, Esc quits, Enter speaks, Tab/Space stops Holly")
         return _interactive_dry(session, args, pump)
-    return _interactive_ui(session, args, pump)
+
+    # Live: the window opens with NO model loaded. The settings panel carries the backend
+    # choices (pre-filled from these flags), and the UI builds brain + TTS on a worker thread
+    # at the first message -- the face and the chat stay responsive through the load. The
+    # device runs at SAMPLE_RATE; `session.say` resamples whatever voice loads into it.
+    audio = LiveAudio(args.tts_rate or SAMPLE_RATE, blocksize=args.blocksize)
+    face = HollyFace(renderer=Renderer(buffers_path), **_face_kwargs(args))
+    session = LiveSession(face, audio, gap=args.gap, tts=None, normalize=not args.no_normalize)
+    print(f"interactive: mouth rect {face.renderer.mouth_rect}; voice + brain load on the "
+          f"first message (settings panel, bottom right). Esc quits, Enter speaks, "
+          f"Tab/Space stops Holly")
+    return _interactive_ui(session, args, None)
 
 
 def _interactive_dry(session, args, pump=None) -> int:

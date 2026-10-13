@@ -63,6 +63,24 @@ the host is plumbing around it. Run everything with `.venv/bin/python`.
 .venv/bin/python -m hollyhost.app --tts piper --dry
 ```
 
+### The settings panel (bottom right) — nothing loads until you speak
+
+The interactive window opens with **no model loaded at all**. The settings panel carries the
+backend choices, and the first message triggers the load on a worker thread (the face and
+chat stay responsive; that first line is kept and spoken once the voice is ready):
+
+- **Voice tab** — TTS backend dropdown (`null` / `piper` / `omnivoice` / `script`) and the
+  voice file (suggestions from `voices/`, or Browse).
+- **Brain tab** — `none` (speak what you type), `llama` (a local GGUF loaded in-process;
+  suggestions from `models/`, or Browse), or `http` (any OpenAI-compatible endpoint: host +
+  port + optional API key, and a model name **propagated from the endpoint's own
+  `/v1/models` list** via Fetch). `script` is the test brain.
+- **Motion tab** — idle breathing overlay and its depth.
+
+The CLI flags (`--tts`, `--brain`, `--model`, `--base-url`, `--http-model`, `--api-key`,
+defaulting to `$OPENAI_API_KEY`) pre-fill the panel; once the first message has loaded the
+backends, those fields lock — restart to change them.
+
 `sounddevice` is **output only** — there is no input path anywhere.
 
 By default the interactive line speaks **exactly what you typed** (`--brain none`). With a brain
@@ -329,7 +347,8 @@ hollyhost/
   app.py       entry point: A0 batch player + A1 interactive text line (Tkinter UI),
                + the --brain chat wiring
   tkui.py      the Tkinter shell: chat log + input (left 2/3), face canvas + settings panel
-               (right 1/3); mouth-rect-only redraws, same clock rule as the rest of the host
+               (right 1/3, Voice/Brain/Motion tabs); backends load lazily at the first
+               message, on a worker thread; mouth-rect-only redraws, same clock rule
   session.py   the pure part: build_session (batch) + LiveSession (interactive) — face queue
                and audio buffer laid out on one clock so they cannot drift; .interrupt() is
                the barge-in (cut the audio at the device position, reset the face queue)

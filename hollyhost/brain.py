@@ -205,13 +205,27 @@ class OpenAICompatBrain:
             self._endpoint(), data=json.dumps(body).encode(), headers=headers, method="POST")
         try:
             response = urllib.request.urlopen(request, timeout=self.timeout)
+        except urllib.error.HTTPError as exc:
+            # the status alone is useless -- LM Studio and friends put the real reason
+            # (a model that failed to load, a bad model name) in the error body.
+            try:
+                detail = exc.read().decode("utf-8", "replace")[:300].strip()
+            except Exception:  # noqa: BLE001 - a broken error body must not mask the status
+                detail = ""
+            raise RuntimeError(f"{self._endpoint()} HTTP {exc.code}" +
+                               (f": {detail}" if detail else "")) from exc
         except (urllib.error.URLError, OSError) as exc:
             raise RuntimeError(f"{self._endpoint()} unreachable: {exc}") from exc
         with response:
+            saw_sse = False
+            other: list[str] = []
             for raw in response:
                 line = raw.decode("utf-8", "replace").strip()
                 if not line.startswith("data:"):
+                    if line:
+                        other.append(line)
                     continue
+                saw_sse = True
                 payload = line[5:].strip()
                 if payload in ("", "[DONE]"):
                     if payload == "[DONE]":
@@ -221,16 +235,39 @@ class OpenAICompatBrain:
                     chunk = json.loads(payload)
                 except json.JSONDecodeError:
                     continue
+                if chunk.get("error"):  # an error *inside* the stream (LM Studio does this)
+                    raise RuntimeError(f"{self._endpoint()}: {_error_text(chunk['error'])}")
                 choice = (chunk.get("choices") or [{}])[0]
                 delta = (choice.get("delta") or {}).get("content") or choice.get("text")
                 if delta:
                     yield delta
+            if not saw_sse and other:
+                # Not SSE at all: either a server that ignored `stream` and answered with
+                # one JSON document, or an error body. Read it instead of yielding silence.
+                try:
+                    doc = json.loads("\n".join(other))
+                except json.JSONDecodeError:
+                    raise RuntimeError(f"{self._endpoint()} replied non-JSON: "
+                                       f"{' '.join(other)[:200]}") from None
+                if doc.get("error"):
+                    raise RuntimeError(f"{self._endpoint()}: {_error_text(doc['error'])}")
+                content = ((doc.get("choices") or [{}])[0].get("message") or {}).get("content")
+                if content:
+                    yield content
+
+
+def _error_text(err) -> str:
+    """The message out of an OpenAI-style error object, whatever shape the server used."""
+    if isinstance(err, dict):
+        return str(err.get("message") or err.get("code") or err)
+    return str(err)
 
 
 def make_brain(kind: str | None, *, model: str | Path | None = None,
                base_url: str | None = None, http_model: str | None = None,
                ctx: int = 2048, gpu_layers: int = -1, max_tokens: int = 200,
                temperature: float = 0.7, threads: int | None = None,
+               api_key: str | None = None,
                script: list[str] | None = None) -> Brain | None:
     """Backend factory for the app. `none` (the default) means: no brain, Phase A1 behaviour.
 
@@ -249,8 +286,42 @@ def make_brain(kind: str | None, *, model: str | Path | None = None,
                              temperature=temperature, n_threads=threads)
     if kind in ("http", "openai", "server"):
         return OpenAICompatBrain(base_url or "http://127.0.0.1:8080", http_model,
-                                 max_tokens=max_tokens, temperature=temperature)
+                                 max_tokens=max_tokens, temperature=temperature,
+                                 api_key=api_key)
     raise ValueError(f"unknown brain {kind!r} (none, script, llama, http)")
+
+
+def list_models(base_url: str, api_key: str | None = None, timeout: float = 10.0) -> list[str]:
+    """The endpoint's own model list (OpenAI-compatible ``GET /v1/models``). Stdlib only.
+
+    Used by the settings panel to offer the model names the server actually serves, instead
+    of making the user type one. llama.cpp's server lists its single loaded model; Ollama's
+    ``/v1`` shim and LM Studio behave the same, so one call covers the field.
+    """
+    base = str(base_url).rstrip("/")
+    if base.endswith("/chat/completions"):
+        base = base[: -len("/chat/completions")]
+    root = base if base.endswith("/v1") else base + "/v1"
+    url = root + "/models"
+    headers = {}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    try:
+        request = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            payload = json.load(response)
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        raise RuntimeError(f"{url} unreachable or not JSON: {exc}") from exc
+    entries = payload.get("data") or payload.get("models") or []
+    names = []
+    for entry in entries:
+        if isinstance(entry, str):
+            names.append(entry)
+        elif isinstance(entry, dict):
+            name = entry.get("id") or entry.get("name")
+            if name:
+                names.append(str(name))
+    return sorted(names)
 
 
 # --------------------------------------------------------------------------- the pump

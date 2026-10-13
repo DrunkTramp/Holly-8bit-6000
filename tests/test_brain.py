@@ -23,8 +23,8 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from hollyhost.brain import (DEFAULT_PERSONA, ScriptBrain, SentencePump, make_brain,
-                             persona_from)
+from hollyhost.brain import (DEFAULT_PERSONA, OpenAICompatBrain, ScriptBrain, SentencePump,
+                             make_brain, persona_from)
 from hollyhost.tts import SentenceSplitter, split_sentences
 
 CORPUS = [
@@ -192,6 +192,70 @@ class TestScriptBrain(unittest.TestCase):
         self.assertEqual(persona_from("one\n  line"), "one line")
         with self.assertRaises(FileNotFoundError):
             persona_from("@nope.txt")
+
+
+class TestOpenAICompatBrainErrors(unittest.TestCase):
+    """The endpoint seam: a server-side failure (LM Studio's model refusing to load, a bad
+    model name) must surface as an error the chat log can show -- never a silent empty reply."""
+
+    @staticmethod
+    def _serve(body_lines: list[bytes], status: int = 200):
+        import http.server
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def do_POST(self, *a):
+                self.send_response(status)
+                self.send_header("Content-Type", "text/event-stream")
+                self.end_headers()
+                for ln in body_lines:
+                    self.wfile.write(ln)
+
+            def log_message(self, *a):
+                pass
+
+        srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        return srv
+
+    def _drain(self, srv):
+        brain = OpenAICompatBrain(f"http://127.0.0.1:{srv.server_address[1]}/v1", "m")
+        return list(brain.reply_stream([{"role": "user", "content": "Boop"}]))
+
+    def test_error_chunk_inside_sse_raises(self):
+        srv = self._serve([b'data: {"error": {"message": "V Cache Quantization requires '
+                                b'flash attention to be enabled"}}\n\n', b"data: [DONE]\n\n"])
+        try:
+            with self.assertRaises(RuntimeError) as cm:
+                self._drain(srv)
+            self.assertIn("flash attention", str(cm.exception))
+        finally:
+            srv.shutdown()
+
+    def test_plain_json_error_body_raises(self):
+        srv = self._serve([b'{"error": {"message": "model failed to load"}}'])
+        try:
+            with self.assertRaises(RuntimeError) as cm:
+                self._drain(srv)
+            self.assertIn("model failed to load", str(cm.exception))
+        finally:
+            srv.shutdown()
+
+    def test_plain_json_completion_is_read_when_stream_is_ignored(self):
+        srv = self._serve([b'{"choices": [{"message": {"content": "Boop back."}}]}'])
+        try:
+            self.assertEqual("".join(self._drain(srv)), "Boop back.")
+        finally:
+            srv.shutdown()
+
+    def test_http_error_status_includes_the_body(self):
+        srv = self._serve([b'{"error": {"message": "no such model"}}'], status=500)
+        try:
+            with self.assertRaises(RuntimeError) as cm:
+                self._drain(srv)
+            self.assertIn("HTTP 500", str(cm.exception))
+            self.assertIn("no such model", str(cm.exception))
+        finally:
+            srv.shutdown()
 
 
 class TestSentencePump(unittest.TestCase):
