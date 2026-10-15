@@ -211,9 +211,13 @@ def _apply_ui_settings(args) -> None:
         host = str(s.get("host") or "").strip()
         port = str(s.get("port") or "").strip()
         if host:
-            if "://" not in host:
-                host = "http://" + host
-            args.base_url = f"{host.rstrip('/')}:{port or '8080'}"
+            scheme, sep, rest = host.partition("://")
+            if not sep:
+                scheme, rest = "http", host
+            default_port = "443" if scheme == "https" else "8080"
+            from .brain import normalize_base_url
+            args.base_url = normalize_base_url(
+                f"{scheme}://{rest.rstrip('/')}:{port or default_port}")
     if args.http_model is None and s.get("http_model"):
         args.http_model = s["http_model"]
     if args.api_key is None and s.get("api_key"):

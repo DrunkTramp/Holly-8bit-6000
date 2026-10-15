@@ -30,6 +30,7 @@ import queue
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Iterator, Protocol
@@ -187,6 +188,32 @@ class LlamaCppBrain:
                 yield delta
 
 
+def normalize_base_url(url: str) -> str:
+    """Make a hand-typed endpoint safe to dial.
+
+    Two cases matter. A port that only restates its scheme's default is noise, so drop it.
+    And an `https` host left on port 80 -- which is what the settings panel produces when you
+    type a URL with a scheme but keep the port field -- sends a TLS handshake to a plain HTTP
+    listener and dies with `SSL: WRONG_VERSION_NUMBER` before any request is sent. Port 80 is
+    never a TLS listener, so treat it as "no explicit port" and let the scheme pick 443.
+    """
+    text = str(url).strip().rstrip("/")
+    try:
+        parts = urllib.parse.urlsplit(text)
+        port = parts.port
+    except ValueError:  # a port field that is not a number: leave the string for the error message
+        return text
+    if port is None or not parts.scheme:
+        return text
+    if port == {"http": 80, "https": 443}.get(parts.scheme):
+        port = None  # redundant: the scheme already implies it
+    elif parts.scheme == "https" and port == 80:
+        port = None  # nothing serves TLS on 80: this is a leftover default, not a real endpoint
+    host = parts.netloc.rpartition(":")[0]  # netloc without its ":port", keeping userinfo/brackets
+    netloc = host if port is None else f"{host}:{port}"
+    return urllib.parse.urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
+
+
 class OpenAICompatBrain:
     """Any OpenAI-compatible chat endpoint, streamed as SSE. Stdlib only.
 
@@ -200,7 +227,7 @@ class OpenAICompatBrain:
     def __init__(self, base_url: str = "http://127.0.0.1:8080", model: str | None = None, *,
                  max_tokens: int = 200, temperature: float = 0.7, api_key: str | None = None,
                  timeout: float = 180.0):
-        self.base_url = str(base_url).rstrip("/")
+        self.base_url = normalize_base_url(base_url)
         self.model = model
         self.max_tokens = int(max_tokens)
         self.temperature = float(temperature)
@@ -317,7 +344,7 @@ def list_models(base_url: str, api_key: str | None = None, timeout: float = 10.0
     of making the user type one. llama.cpp's server lists its single loaded model; Ollama's
     ``/v1`` shim and LM Studio behave the same, so one call covers the field.
     """
-    base = str(base_url).rstrip("/")
+    base = normalize_base_url(base_url)
     if base.endswith("/chat/completions"):
         base = base[: -len("/chat/completions")]
     root = base if base.endswith("/v1") else base + "/v1"

@@ -24,7 +24,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from hollyhost.brain import (DEFAULT_PERSONA, OpenAICompatBrain, ScriptBrain, SentencePump,
-                             make_brain, persona_from)
+                             make_brain, normalize_base_url, persona_from)
 from hollyhost.tts import SentenceSplitter, split_sentences
 
 CORPUS = [
@@ -204,6 +204,38 @@ class TestScriptBrain(unittest.TestCase):
                         "the default persona should open with the file's text")
         self.assertIn(SPOKEN_FORM_RULES, DEFAULT_PERSONA,
                       "the spoken-form rules must ride along with the file persona")
+
+
+class TestNormalizeBaseUrl(unittest.TestCase):
+    """The endpoint a human types in the settings panel is not always the endpoint to dial.
+
+    The failure this pins is the one that bit a real run: an `https` host left on port 80 sends
+    a TLS handshake to a plain HTTP listener and dies with `SSL: WRONG_VERSION_NUMBER`.
+    """
+
+    def test_a_port_that_only_restates_the_scheme_is_dropped(self):
+        for url, want in [("http://127.0.0.1:80", "http://127.0.0.1"),
+                          ("https://api.example.com:443", "https://api.example.com"),
+                          ("http://127.0.0.1:8080", "http://127.0.0.1:8080"),
+                          ("http://127.0.0.1:11434/v1", "http://127.0.0.1:11434/v1")]:
+            with self.subTest(url=url):
+                self.assertEqual(normalize_base_url(url), want)
+
+    def test_https_on_port_80_becomes_plain_https(self):
+        self.assertEqual(normalize_base_url("https://api.deepseek.com:80"),
+                         "https://api.deepseek.com")
+        self.assertEqual(OpenAICompatBrain("https://api.deepseek.com:80")._endpoint(),
+                         "https://api.deepseek.com/v1/chat/completions")
+
+    def test_a_non_default_port_is_kept(self):
+        for url in ("http://box.local:1234", "http://[::1]:8080", "http://u:pw@host:8080/v1",
+                    "https://host.example:8443/v1"):
+            with self.subTest(url=url):
+                self.assertEqual(normalize_base_url(url), url)
+
+    def test_a_port_that_is_not_a_number_is_left_for_the_error_message(self):
+        self.assertEqual(normalize_base_url("https://api.example.com:8o"),
+                         "https://api.example.com:8o")
 
 
 class TestOpenAICompatBrainErrors(unittest.TestCase):

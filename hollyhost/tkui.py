@@ -356,7 +356,7 @@ class InteractiveUI:
         self.http_port = tk.Entry(self.http_frame, bg=FIELD, fg=FG, insertbackground=FG,
                                   relief="flat", highlightthickness=1, width=6,
                                   highlightbackground=EDGE, highlightcolor=EDGE)
-        self.http_port.insert(0, str(parts.port or 8080))
+        self.http_port.insert(0, str(parts.port or (443 if parts.scheme == "https" else 8080)))
         self.http_port.grid(row=1, column=1, sticky="e")
 
         ttk.Label(self.http_frame, text="API key (if the endpoint needs one)").grid(
@@ -477,7 +477,7 @@ class InteractiveUI:
         scheme, sep, rest = raw.partition("://")
         if not sep:
             scheme, rest = "http", raw
-        port = self.http_port.get().strip() or "8080"
+        port = self.http_port.get().strip() or ("443" if scheme == "https" else "8080")
         return {
             "tts": self.tts_backend.get(),
             "voice": self.tts_voice.get().strip() or None,

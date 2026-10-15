@@ -131,6 +131,11 @@ while the model is still writing the rest.
 
 # anything that speaks OpenAI's HTTP API (llama-server, Ollama, LM Studio) — no build step:
 .venv/bin/python -m hollyhost.app --brain http --base-url http://127.0.0.1:8080 --tts piper --captions
+
+# a hosted endpoint: give no port and the scheme picks 443. `https://host:80` is the classic
+# mistake — a TLS handshake aimed at a plain HTTP port (`SSL: WRONG_VERSION_NUMBER`):
+.venv/bin/python -m hollyhost.app --brain http --base-url https://api.deepseek.com \
+  --http-model deepseek-flash --api-key "$DEEPSEEK_API_KEY" --tts omnivoice --captions
 ```
 
 `llama-cpp-python` is the only dependency that needs a compiler. On this box (RTX 5060 Ti,
