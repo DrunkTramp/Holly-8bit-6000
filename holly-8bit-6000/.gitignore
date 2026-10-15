@@ -1,0 +1,12 @@
+# Regenerable: buffers, timelines, debug videos (see HANDOFF "Asset facts")
+build/
+
+# Environment
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+
+# Scratch
+nohup.out
+.ruff_cache/

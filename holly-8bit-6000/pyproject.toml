@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "holly-8bit-6000"
+version = "0.1.0"
+description = "Viseme lip-sync animation component: audio buffer in, mouth-rect frames out"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.26",
+]
+
+[project.optional-dependencies]
+# Build time: baking buffers out of the layered PSD (tools/export_visemes.py).
+build = [
+    "psd-tools==1.24.0",
+    "pillow>=10",
+]
+# The standalone reference player (tools/reference_player.py). The core never imports it.
+player = [
+    "pygame==2.6.1",
+]
+
+[project.urls]
+Homepage = "https://github.com/DrunkTramp/Holly-8bit-6000"
+
+[tool.setuptools]
+# Only the library. `tools/` is scripts, `build/` is generated, `model/` is vendored.
+packages = ["holly"]
