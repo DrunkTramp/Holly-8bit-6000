@@ -160,5 +160,67 @@ class TestConfigDefaults(unittest.TestCase):
         self.assertEqual(args.gpu_layers, -1)
 
 
+class TestUiSettings(unittest.TestCase):
+    """The persistent settings file: saved panel state fills unset flags; explicit flags win."""
+
+    def _file(self, d, payload):
+        p = Path(d) / "ui.json"
+        p.write_text(json.dumps(payload))
+        return p
+
+    def test_saved_settings_fill_unset_flags(self):
+        from hollyhost.settings import load_settings, save_settings
+
+        with tempfile.TemporaryDirectory() as d:
+            sp = self._file(d, {"tts": "piper", "brain": "http", "host": "box.local",
+                                "port": "1234", "http_model": "m1", "api_key": "k",
+                                "llama_model": str(Path(d) / "m.gguf"),
+                                "idle_motion": True, "idle_weight": 0.4})
+            args = app.parse_args(["--settings", str(sp)])
+            app._apply_ui_settings(args)
+            self.assertEqual(args.tts, "piper")
+            self.assertEqual(args.brain, "http")
+            self.assertEqual(args.base_url, "http://box.local:1234")
+            self.assertEqual(args.http_model, "m1")
+            self.assertEqual(args.api_key, "k")
+            self.assertEqual(args.model, Path(d) / "m.gguf")
+            self.assertTrue(args.idle_motion)
+            self.assertEqual(args.idle_weight, 0.4)
+
+            save_settings({"tts": "null"}, sp)
+            self.assertEqual(load_settings(sp), {"tts": "null"})  # round trip
+
+    def test_explicit_flags_beat_saved_settings(self):
+        with tempfile.TemporaryDirectory() as d:
+            sp = self._file(d, {"tts": "piper", "brain": "llama", "idle_weight": 0.4})
+            args = app.parse_args(["--settings", str(sp), "--tts", "null", "--brain", "none",
+                                   "--idle-weight", "0.1"])
+            app._apply_ui_settings(args)
+            self.assertEqual(args.tts, "null")
+            self.assertEqual(args.brain, "none")
+            self.assertEqual(args.idle_weight, 0.1)
+            self.assertTrue(args.model is None)
+
+    def test_no_settings_file_keeps_the_built_in_defaults(self):
+        args = app.parse_args(["--settings", "/nonexistent/holly-ui-settings.json"])
+        app._apply_ui_settings(args)
+        self.assertEqual(args.tts, "null")
+        self.assertEqual(args.brain, "none")
+        self.assertIsNone(args.base_url)
+        self.assertFalse(args.idle_motion)
+        self.assertEqual(args.idle_weight, 0.25)
+
+    def test_saved_settings_outrank_the_calibration_config(self):
+        """A model chosen in the panel beats the config's suggested one."""
+        with tempfile.TemporaryDirectory() as d:
+            cfgp = Path(d) / "cfg.json"
+            cfgp.write_text(json.dumps({"model": "/config/suggested.gguf"}))
+            sp = self._file(d, {"llama_model": "/panel/chosen.gguf"})
+            args = app.parse_args(["--config", str(cfgp), "--settings", str(sp)])
+            app._apply_ui_settings(args)
+            app._apply_config_defaults(args)
+            self.assertEqual(args.model, Path("/panel/chosen.gguf"))
+
+
 if __name__ == "__main__":
     unittest.main()

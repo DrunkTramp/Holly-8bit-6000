@@ -81,6 +81,12 @@ The CLI flags (`--tts`, `--brain`, `--model`, `--base-url`, `--http-model`, `--a
 defaulting to `$OPENAI_API_KEY`) pre-fill the panel; once the first message has loaded the
 backends, those fields lock — restart to change them.
 
+**The panel remembers.** Its state is saved to `hollyhost_settings.json` (repo root,
+gitignored; override with `--settings`) whenever the backends load and again when the window
+closes, and restored at the next launch. Precedence is explicit flag > saved settings >
+built-in default. Note the file can hold an API key in plain text — same per-machine,
+gitignored logic as the calibration config.
+
 `sounddevice` is **output only** — there is no input path anywhere.
 
 By default the interactive line speaks **exactly what you typed** (`--brain none`). With a brain

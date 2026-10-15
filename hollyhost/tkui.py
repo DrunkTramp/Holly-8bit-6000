@@ -344,7 +344,7 @@ class InteractiveUI:
         self.http_frame.columnconfigure(1, weight=0)
         ttk.Label(self.http_frame, text="Host").grid(row=0, column=0, sticky="w")
         ttk.Label(self.http_frame, text="Port").grid(row=0, column=1, sticky="w", padx=(6, 0))
-        parts = urllib.parse.urlsplit(self.args.base_url)
+        parts = urllib.parse.urlsplit(self.args.base_url or "http://127.0.0.1:8080")
         host = parts.hostname or "127.0.0.1"
         if parts.scheme and parts.scheme != "http":
             host = f"{parts.scheme}://{host}"
@@ -535,11 +535,36 @@ class InteractiveUI:
                                      normalize=not self.args.no_normalize)
         self._backend_state = "ready"
         self._lock_backend_settings()
+        self.save_settings()  # what just worked is what the next launch should pre-fill
         self._log("sys", f"voice={tts.name} brain={brain.name if brain else 'none'} ready "
                          "(restart to change backends)")
         if self._pending_text:
             text, self._pending_text = self._pending_text, None
             self._dispatch(text)
+
+    def _settings_payload(self) -> dict:
+        """Everything the panel holds, as `hollyhost/settings.py` stores it."""
+        snap = self._snapshot()
+        return {
+            "tts": snap["tts"],
+            "voice": snap["voice"],
+            "brain": snap["brain"],
+            "llama_model": snap["llama_model"],
+            "host": self.http_host.get().strip(),
+            "port": self.http_port.get().strip(),
+            "api_key": snap["api_key"],
+            "http_model": snap["http_model"],
+            "idle_motion": bool(self.idle_on.get()),
+            "idle_weight": round(self.idle_weight.get(), 3),
+        }
+
+    def save_settings(self) -> None:
+        from .settings import save_settings
+
+        try:
+            save_settings(self._settings_payload(), self.args.settings)
+        except OSError as exc:
+            self._log("sys", "! could not save settings: " + str(exc))
 
     def _lock_backend_settings(self) -> None:
         """Backends are live threads/models now; changing them mid-session would need a
@@ -678,6 +703,7 @@ def run_interactive(session, args, pump=None) -> int:
 
     ui.start()
     root.mainloop()
+    ui.save_settings()  # the panel exactly as the user left it, restored next launch
     root.destroy()
 
     if pump is not None:

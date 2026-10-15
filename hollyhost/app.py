@@ -46,8 +46,9 @@ def parse_args(argv=None):
     p.add_argument("--seconds", type=float, default=None, help="Batch mode: stop after this much wall time.")
 
     # A1: text -> speech.
-    p.add_argument("--tts", choices=("null", "piper", "omnivoice", "script"), default="null",
-                   help="Speech backend for the interactive line (null runs with no downloads).")
+    p.add_argument("--tts", choices=("null", "piper", "omnivoice", "script"), default=None,
+                   help="Speech backend for the interactive line (default: saved settings, "
+                        "else null -- which runs with no downloads).")
     p.add_argument("--voice", default=None,
                    help="Piper .onnx voice (with --tts piper); omnivoice reference audio "
                         "(with --tts omnivoice, default voices/holly_base.flac).")
@@ -62,11 +63,13 @@ def parse_args(argv=None):
     p.add_argument("--dry", action="store_true", help="Hand-driven clock: no audio, no window. Loop proof only.")
 
     # C: the brain. `none` keeps A1: Holly speaks exactly what you type.
-    p.add_argument("--brain", choices=("none", "script", "llama", "http"), default="none",
-                   help="Reply generator. none (default) speaks what you type; llama needs --model.")
+    p.add_argument("--brain", choices=("none", "script", "llama", "http"), default=None,
+                   help="Reply generator (default: saved settings, else none, which speaks "
+                        "what you type). llama needs --model.")
     p.add_argument("--model", type=Path, default=None, help="GGUF model for --brain llama.")
-    p.add_argument("--base-url", default="http://127.0.0.1:8080",
-                   help="OpenAI-compatible endpoint for --brain http (llama-server, Ollama).")
+    p.add_argument("--base-url", default=None,
+                   help="OpenAI-compatible endpoint for --brain http (llama-server, Ollama). "
+                        "Default: saved settings, else http://127.0.0.1:8080.")
     p.add_argument("--http-model", default=None, help="Model name for --brain http (llama.cpp ignores it).")
     p.add_argument("--api-key", default=os.environ.get("OPENAI_API_KEY"),
                    help="Bearer token for --brain http (default: $OPENAI_API_KEY, if set).")
@@ -98,6 +101,10 @@ def parse_args(argv=None):
     p.add_argument("--config", type=Path, default=None,
                    help="Calibration config file (default: hollyhost_config.json in the repo root). "
                         "Read for defaults on a normal run; written by --calibrate.")
+    p.add_argument("--settings", type=Path, default=None,
+                   help="UI settings file (default: hollyhost_settings.json in the repo root). "
+                        "Read at launch to pre-fill the settings panel; written by the panel "
+                        "when the backends load and when the window closes.")
     p.add_argument("--no-write", action="store_true",
                    help="With --calibrate: print and derive, but do not write the config file.")
 
@@ -105,13 +112,15 @@ def parse_args(argv=None):
     p.add_argument("--barge-at", type=float, default=None,
                    help="With the interactive --dry run: cut Holly off at this clock position "
                         "(seconds), exercising the barge-in path headlessly (Tab does it live).")
-    p.add_argument("--idle-motion", action="store_true",
+    p.add_argument("--idle-motion", action=argparse.BooleanOptionalAction, default=None,
                    help="Throttled 'breathing' on the idle mouth (at most 2 draws/s). A host-side "
                         "overlay that restores the pure idle pose whenever speech is queued; with "
-                        "this off the component's zero-draw idle is untouched.")
-    p.add_argument("--idle-weight", type=float, default=0.25,
-                   help="Peak breath weight with --idle-motion (default 0.25; speech poses sit at "
-                        "0.65, and measured on the bake, 0.12 is effectively invisible).")
+                        "this off the component's zero-draw idle is untouched. "
+                        "Default: saved settings, else off.")
+    p.add_argument("--idle-weight", type=float, default=None,
+                   help="Peak breath weight with --idle-motion (default: saved settings, else "
+                        "0.25; speech poses sit at 0.65, and measured on the bake, 0.12 is "
+                        "effectively invisible).")
     p.add_argument("--no-gain", action="store_true",
                    help="Turn off the classifier's per-viseme display gain (HeadAudio visemeMaxs "
                         "caps: poses at 0.65, PP/FF at 0.75) and get raw one-hot poses -- the A/B "
@@ -156,6 +165,7 @@ def _face_kwargs(args) -> dict:
 
 def run(argv=None) -> int:
     args = parse_args(argv)
+    _apply_ui_settings(args)
     _apply_config_defaults(args)
     if args.calibrate:
         return run_calibrate(args)
@@ -173,6 +183,41 @@ def _config_path(args):
     from .calibrate import DEFAULT_CONFIG_PATH
 
     return Path(args.config) if args.config else DEFAULT_CONFIG_PATH
+
+
+def _apply_ui_settings(args) -> None:
+    """Fill unset backend/UI flags from the persistent settings file (saved by the panel).
+
+    Precedence is explicit flag > saved settings > built-in default, and it runs before
+    `_apply_config_defaults` so a model chosen in the panel outranks the calibration
+    config's suggestion. May contain an API key in plain text -- the file is gitignored.
+    """
+    from .settings import load_settings
+
+    s = load_settings(args.settings)
+    if args.tts is None:
+        args.tts = s.get("tts") or "null"
+    if args.voice is None and s.get("voice"):
+        args.voice = s["voice"]
+    if args.brain is None:
+        args.brain = s.get("brain") or "none"
+    if args.model is None and s.get("llama_model"):
+        args.model = Path(s["llama_model"])
+    if args.base_url is None:
+        host = str(s.get("host") or "").strip()
+        port = str(s.get("port") or "").strip()
+        if host:
+            if "://" not in host:
+                host = "http://" + host
+            args.base_url = f"{host.rstrip('/')}:{port or '8080'}"
+    if args.http_model is None and s.get("http_model"):
+        args.http_model = s["http_model"]
+    if args.api_key is None and s.get("api_key"):
+        args.api_key = s["api_key"]
+    if args.idle_motion is None:
+        args.idle_motion = bool(s.get("idle_motion", False))
+    if args.idle_weight is None:
+        args.idle_weight = float(s.get("idle_weight", 0.25))
 
 
 def _apply_config_defaults(args) -> None:
