@@ -4,7 +4,7 @@ Two modes, one clock rule (`t` is frames the output callback has consumed, never
 `time.time()`):
 
     # A0 -- batch: queue files, play once, prove the clock.
-    python -m hollyhost.app --audio ../Holly/test_audio.flac --audio ../Holly/test_audio.flac
+    python -m hollyhost.app --audio holly-8bit-6000/test_audio.flac --audio holly-8bit-6000/test_audio.flac
 
     # A1 -- interactive: type, Holly speaks it with a synced mouth (no --audio).
     python -m hollyhost.app --tts null
@@ -142,7 +142,7 @@ def _resolve_buffers(arg):
 
     path = Path(arg) if arg else DEFAULT_BUFFERS
     if not path.exists():
-        print(f"missing buffers: {path}\n  (cd ../Holly && python tools/export_visemes.py "
+        print(f"missing buffers: {path}\n  (cd holly-8bit-6000 && ../.venv/bin/python tools/export_visemes.py "
               f"--scale 0.5 --resample nearest --out build/visemes_pixel)", file=sys.stderr)
         raise SystemExit(2)
     return path

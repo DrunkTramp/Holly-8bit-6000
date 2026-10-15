@@ -3,10 +3,10 @@
 This file is the authoritative state record for the **host** repo. Read it before touching
 this code; several decisions here cannot be inferred from the source alone.
 
-- The **animation component** lives in `../Holly` and is **finished** — consume it as a
+- The **animation component** lives in `holly-8bit-6000/` and is **finished** — consume it as a
   library (`import holly`), never rebuild or re-architect it. Its own state record is
-  `../Holly/HANDOFF.md`; its plan is `../Holly/viseme-mouth-plan.md`.
-- The **whole-program plan** (this host, phases A–E) is `../Holly/holly-host-plan.md`.
+  `holly-8bit-6000/HANDOFF.md`; its plan is `holly-8bit-6000/viseme-mouth-plan.md`.
+- The **whole-program plan** (this host, phases A–E) is `holly-8bit-6000/holly-host-plan.md`.
 - This repo's user-facing doc is `README.md`.
 
 Paste the **Kickoff prompt** at the bottom into a new session.
@@ -23,14 +23,14 @@ Paste the **Kickoff prompt** at the bottom into a new session.
 | D — persona / TTS text preprocessing | **Done and verified** (2026-10-11): `hollyhost/normalize.py` (`preprocess`) expands numbers/decimals/unit-slashes/symbols/abbreviations and strips leaked markdown **after** splitting, **before** synthesis; wired into `SentencePump` and the typed `LiveSession.say` path (caption keeps the original text), with `--no-normalize` to opt out. `DEFAULT_PERSONA` rewritten for spoken output. Preprocessing tested (28 cases). The user ran the persona with `--tts omnivoice` and judged it **sounded like Holly** — with the model not yet fine-tuned, the persona is good enough for now; a real fine-tune is the later lever (see Open items). |
 | E — polish (barge-in, idle micro-motion, per-viseme gain) | **Done and accepted** (2026-10-13). Barge-in: Tab (or Space on an empty line) in the live UI; `--barge-at <s>` headless — `LiveAudio.flush()` + `HollyFace.reset()` + `SentencePump.interrupt()`; the pinning rule survives the cut. Idle micro-motion: opt-in `--idle-motion` (≤ 2 draws/s overlay, off by default; default peak weight **0.25** — 0.12 was measured invisible and the user reported seeing nothing; `--idle-weight` is the dial). Per-viseme gain: the component's `visemeMaxs` curve is exposed via `--no-gain`/`--key-hz`/`--fade-shape`; *custom* curves would be component-side work — not done. Ran on the real device with piper; the user accepted the look and behaviour as-is. |
 
-**123 host tests pass** (~12 s): `.venv/bin/python -m unittest discover -s tests -t .`
-**147 animation tests pass** (untouched): `cd ../Holly && .venv/bin/python -m unittest discover -s tests -t .`
+**135 host tests pass** (~15 s): `.venv/bin/python -m pytest -q`
+**147 animation tests pass** (untouched): `cd holly-8bit-6000 && ../.venv/bin/python -m pytest -q`
 
 ## Environment (this box, verified)
 
-- **Dedicated venv at `Holly-host/.venv`** — do NOT run the host under `../Holly/.venv`
-  (that one lacks sounddevice/piper/setuptools). Python 3.12.3, pip 26.2.1.
-- Installed editable: `holly-8bit-6000` (from `../Holly`), `holly-host[ui,dev,piper]`, plus
+- **Dedicated venv at `Holly-host/.venv`** — the only venv in this repo; the component is
+  installed into it editable from `holly-8bit-6000/`. Python 3.12.3, pip 26.2.1.
+- Installed editable: `holly-8bit-6000` (from `./holly-8bit-6000`, with its `[build]` extra for the PSD bake), `holly-host[ui,dev,piper]`, plus
   **`llama-cpp-python` 0.3.36** in the host venv (user-installed 2026-10-11 with the CUDA
   `CMAKE_ARGS` below). Versions: numpy 2.5.3, pygame 2.6.1, pytest 9.1.1, sounddevice 0.5.6,
   piper-tts 1.8.0, onnxruntime 1.30.0.
@@ -44,10 +44,11 @@ Paste the **Kickoff prompt** at the bottom into a new session.
   `en_GB-alan-medium.onnx` (British male — apt for Holly; the alphabetical default for
   `--tts piper`) and `en_US-lessac-medium.onnx`. Fetch more with
   `.venv/bin/python -m piper.download_voices <name> --download-dir voices`.
-- **Two generated assets in `../Holly` are required and gitignored there** — a fresh clone has
-  neither: `build/visemes_pixel/visemes.npz` (the 576x432 nearest bake `holly.DEFAULT_BUFFERS`
-  points at; re-create with `tools/export_visemes.py --scale 0.5 --resample nearest --out
-  build/visemes_pixel`) and `model/model-en-mixed.bin` (refetch per `../Holly/model/README.md`).
+- **Two generated assets in `holly-8bit-6000/` are required and gitignored there** — a fresh clone
+  has neither: `build/visemes_pixel/visemes.npz` (the 576x432 nearest bake `holly.DEFAULT_BUFFERS`
+  points at; re-create with `cd holly-8bit-6000 && ../.venv/bin/python tools/export_visemes.py
+  --scale 0.5 --resample nearest --out build/visemes_pixel`) and `model/model-en-mixed.bin`
+  (refetch per `holly-8bit-6000/model/README.md`).
 - `ffmpeg` is present (the offline `decode` path shells out to it).
 - **GPU / LLM side:** RTX 5060 Ti **16 GB**, driver 595.91.07, CUDA 13.0 toolkit at
   `/usr/local/cuda` with **`nvcc` NOT on `PATH`**, 31 GB RAM, 16 cores. `g++`, `make`, `curl`
@@ -383,7 +384,7 @@ cd Holly-host
 # the clone's own end-to-end synthesis test (prints the steady-state realtime factor):
 HOLLY_OMNIVOICE_DEVICE=cuda .venv/bin/python -m unittest tests.test_tts.TestOmniVoice -v
 # batch clock proof, no device:
-.venv/bin/python -m hollyhost.app --audio ../Holly/test_audio.flac --audio ../Holly/test_audio.flac --gap 0.3 --dry
+.venv/bin/python -m hollyhost.app --audio holly-8bit-6000/test_audio.flac --audio holly-8bit-6000/test_audio.flac --gap 0.3 --dry
 # chat path, no device, no model (a whole turn is ~18 s of speech, so give it the budget):
 .venv/bin/python -m hollyhost.app --brain script --tts piper --dry --seconds 25
 # the Phase E barge-in headless (cut at 2 s of clock; prints BARGE-IN, mouth must return to sil):
@@ -469,14 +470,14 @@ the real voice was measured: 1062 polls / 128 draws (**12.1%**) / mouth back at 
    micro-motion and the look dials are implemented and tested (see the two settled sections);
    123 host tests pass. What is *not* done: **custom per-viseme gain curves** — the component
    already caps poses per viseme (`HA_VISEME_MAXS`, 0.65/0.75, on via `gain=True`); retuning
-   those numbers is a component-side change, and ../Holly is frozen — the host exposes
+   those numbers is a component-side change, and the component is frozen — the host exposes
    `--no-gain` for the A/B instead. If the curves must change, that is a decision to take to
    the component repo, not to route around in the host.
 
 ## Kickoff prompt
 
 > Continue the **Holly host** at `/home/irreverend/Projects/Holly-host`. Read this repo's
-> `HANDOFF.md` first (authoritative state), then `README.md`, then `../Holly/HANDOFF.md`
+> `HANDOFF.md` first (authoritative state), then `README.md`, then `holly-8bit-6000/HANDOFF.md`
 > (the finished animation component — consume it, never modify it). Phase A (skeleton, no LLM) is
 > **done and verified on real hardware**; Phase C (the brain) is **done too** — the user ran
 > `--brain llama` + a 3B GGUF + piper on this box and confirmed the answer was spoken with the
@@ -486,11 +487,11 @@ the real voice was measured: 1062 polls / 128 draws (**12.1%**) / mouth back at 
 > accepted** (2026-10-13): barge-in (Tab / `--barge-at`), opt-in `--idle-motion` breathing
 > (default peak weight 0.25, `--idle-weight` dial), and the look dials (`--no-gain`/`--key-hz`/
 > `--fade-shape`) — the user ran them on the real device and asked for no changes. See the two
-> settled sections. 123 host tests + 147 animation tests pass.
+> settled sections. 135 host tests + 147 animation tests pass.
 >
-> Verify before anything else: `.venv/bin/python -m unittest discover -s tests -t .` → 123 OK, and
-> `cd ../Holly && .venv/bin/python -m unittest discover -s tests -t .` → 147 OK. The host runs
-> under its **own** `.venv` (not `../Holly/.venv`). `libportaudio2` is installed, two stock Piper
+> Verify before anything else: `.venv/bin/python -m pytest -q` → 135 OK, and
+> `cd holly-8bit-6000 && ../.venv/bin/python -m pytest -q` → 147 OK. Both suites run under this
+> repo's single `.venv`. `libportaudio2` is installed, two stock Piper
 > voices are in `voices/` (gitignored), and `llama-cpp-python` 0.3.36 (CUDA build, GPU offload
 > works) is installed.
 >

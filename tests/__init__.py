@@ -1,1 +1,1 @@
-"""Host tests. Run: ../Holly/.venv/bin/python -m unittest discover -s tests -t ."""
+"""Host tests. Run: .venv/bin/python -m pytest -q (the component's suite is in holly-8bit-6000/)."""

@@ -38,7 +38,7 @@ from hollyhost.session import LiveSession
 
 BASE = VISEME_INDEX[BASE_VISEME]
 POLL_HZ = 60.0
-BUFFERS = Path(__file__).resolve().parents[1].parent / "Holly" / "build" / "visemes_pixel" / "visemes.npz"
+BUFFERS = Path(__file__).resolve().parents[1] / "holly-8bit-6000" / "build" / "visemes_pixel" / "visemes.npz"
 
 
 def burst(seconds: float, f0: float, tail_s: float = 0.08) -> np.ndarray:

@@ -15,8 +15,8 @@ from holly.runtime import HollyFace
 from hollyhost.audio import FakeDevice
 from hollyhost.session import SAMPLE_RATE, build_session
 
-AUDIO = Path(__file__).resolve().parents[1].parent / "Holly" / "test_audio.flac"
-BUFFERS = Path(__file__).resolve().parents[1].parent / "Holly" / "build" / "visemes_pixel" / "visemes.npz"
+AUDIO = Path(__file__).resolve().parents[1] / "holly-8bit-6000" / "test_audio.flac"
+BUFFERS = Path(__file__).resolve().parents[1] / "holly-8bit-6000" / "build" / "visemes_pixel" / "visemes.npz"
 
 
 def backed_face():

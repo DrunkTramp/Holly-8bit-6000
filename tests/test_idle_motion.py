@@ -24,7 +24,7 @@ from holly.vise import BASE_VISEME, VISEME_INDEX
 
 from hollyhost.idle_motion import IdleMotion
 
-BUFFERS = Path(__file__).resolve().parents[1].parent / "Holly" / "build" / "visemes_pixel" / "visemes.npz"
+BUFFERS = Path(__file__).resolve().parents[1] / "holly-8bit-6000" / "build" / "visemes_pixel" / "visemes.npz"
 
 
 class FakeClock:

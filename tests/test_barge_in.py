@@ -26,7 +26,7 @@ from hollyhost.brain import SentencePump
 from hollyhost.session import FACE_RATE, SAMPLE_RATE, LiveSession
 from hollyhost.tts import NullTTS
 
-BUFFERS = Path(__file__).resolve().parents[1].parent / "Holly" / "build" / "visemes_pixel" / "visemes.npz"
+BUFFERS = Path(__file__).resolve().parents[1] / "holly-8bit-6000" / "build" / "visemes_pixel" / "visemes.npz"
 
 
 def backed_face():

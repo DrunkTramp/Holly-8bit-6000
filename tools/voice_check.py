@@ -8,7 +8,7 @@ over a few sentences per voice and prints the numbers that separate a good voice
 degenerate one — no audio device, no window, just `HollyFace.analyse()`.
 
 If a voice looks wrong, the fix is the classifier's gate/gain knobs (see `HollyFace`), never
-the renderer. The by-eye judgement is `../Holly/tools/reference_player.py --audio <file>`.
+the renderer. The by-eye judgement is `holly-8bit-6000/tools/reference_player.py --audio <file>`.
 
     .venv/bin/python tools/voice_check.py                       # every voice in voices/
     .venv/bin/python tools/voice_check.py --voices voices/en_GB-alan-medium.onnx

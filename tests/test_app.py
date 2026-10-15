@@ -24,7 +24,7 @@ from holly.runtime import DEFAULT_BUFFERS, DEFAULT_MODEL
 from hollyhost import app
 from hollyhost import brain as app_brain
 
-ANIM = Path(__file__).resolve().parents[1].parent / "Holly"
+ANIM = Path(__file__).resolve().parents[1] / "holly-8bit-6000"
 AUDIO = ANIM / "test_audio.flac"
 
 
