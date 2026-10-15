@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "numpy>=1.26",
-    "holly-8bit-6000",          # the animation component; pip install -e ../Holly
+    "holly-8bit-6000",          # the animation component, in-tree: pip install -e ./holly-8bit-6000
     "sounddevice>=0.4.6",       # audio OUTPUT only. Never a microphone.
 ]
 
@@ -27,3 +27,10 @@ dev = ["pytest>=8"]
 
 [tool.setuptools]
 packages = ["hollyhost"]
+
+[tool.pytest.ini_options]
+# `tests/` (host) and `holly-8bit-6000/tests/` (component) are both packages named `tests`, and
+# both contain a `test_playback_loop.py`. importlib mode gives every file a unique module name,
+# so the two suites can coexist; `testpaths` keeps a bare `pytest` on the host suite.
+addopts = "--import-mode=importlib"
+testpaths = ["tests"]

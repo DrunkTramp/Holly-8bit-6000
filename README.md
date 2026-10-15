@@ -1,12 +1,14 @@
 # Holly host
 
-The application shell around the [Holly-8bit-6000](../Holly) animation component: a
+The application shell around the [Holly-8bit-6000](holly-8bit-6000) animation component: a
 keyboard-driven Holly that speaks text with a lip-synced, retro pixel-art face in a Tkinter
 window: chat log and input line on the left two thirds, the face (top) and a settings panel
 (bottom) on the right third. You type, a voice synthesises it, Holly's mouth moves in time
 with the audio *he himself is playing* — never a microphone.
 
-The animation component is a finished library. This repo consumes it, it does not modify it.
+The animation component is a finished library. This repo consumes it, it does not modify it —
+and it now lives *in* this repo, at `holly-8bit-6000/`, with its own package, tests, tools and
+history (merged with `git subtree`, so every component commit is still here).
 
 ## Integration model
 
@@ -16,7 +18,7 @@ component's venv happens to have:
 
 ```sh
 python3 -m venv .venv
-.venv/bin/pip install -e ../Holly            # the animation component -> `import holly`
+.venv/bin/pip install -e ./holly-8bit-6000    # the animation component -> `import holly`
 .venv/bin/pip install -e ".[ui,dev,piper]"   # host + pillow + pytest + piper-tts (+ sounddevice binding)
 .venv/bin/pip install -e ".[ui,dev,piper,llm]"  # + llama.cpp bindings (Phase C, see "A brain")
 # Tkinter ships with the system Python on most distros, but on Debian/Ubuntu it is a separate
@@ -25,22 +27,36 @@ python3 -m venv .venv
 # CUDA wheels installed first. See "OmniVoice GPU voice clone (opt-in)" below.
 ```
 
-`holly.DEFAULT_BUFFERS` / `DEFAULT_MODEL` resolve against the animation repo's own root, so
-the host runs from *here* and still finds the baked face and the vendored classifier model.
+`holly.DEFAULT_BUFFERS` / `DEFAULT_MODEL` resolve against the component's own root
+(`holly-8bit-6000/`), so the host runs from *here* and still finds the baked face and the
+vendored classifier model.
 
-### Two generated assets (in the animation repo, gitignored)
+### Two generated assets (inside `holly-8bit-6000/`, gitignored)
 
-A fresh clone of `../Holly` has neither, and the host will not render without them:
+A fresh clone has neither, and the host will not render without them:
 
 ```sh
-cd ../Holly
+cd holly-8bit-6000
 .venv/bin/python tools/export_visemes.py --scale 0.5 --resample nearest --out build/visemes_pixel
 # model/model-en-mixed.bin — refetch per model/README.md
 ```
 
 `build/visemes_pixel/visemes.npz` is the 576x432 nearest bake the host uses (the settled
 corner-element size: the mouth rect is 168x132, ~0.72 ms/draw). Verify the component is
-intact before starting: `.venv/bin/python -m unittest discover -s tests -t .` → **147 tests, OK**.
+intact before starting: `cd holly-8bit-6000 && .venv/bin/python -m unittest discover -s tests -t .`
+→ **147 tests, OK**.
+
+### Tests: two packages, two commands
+
+`tests/` is the host's; `holly-8bit-6000/tests/` is the component's. Bare `pytest` at the root
+runs the host suite (see `testpaths` in `pyproject.toml`); the component suite needs the
+component's build-time extras, so run it from its own directory:
+
+```sh
+.venv/bin/python -m pytest -q                          # host
+.venv/bin/pip install -e "./holly-8bit-6000[build]"    # psd-tools, for the component's bake tests
+(cd holly-8bit-6000 && ../.venv/bin/python -m pytest -q)
+```
 
 ## Running it
 
@@ -50,7 +66,7 @@ the host is plumbing around it. Run everything with `.venv/bin/python`.
 
 ```sh
 # A0 — batch: queue files, play once. Proves the clock, dirty check, zero-draw idle, return-to-rest.
-.venv/bin/python -m hollyhost.app --audio ../Holly/test_audio.flac --audio ../Holly/test_audio.flac --gap 0.3
+.venv/bin/python -m hollyhost.app --audio holly-8bit-6000/test_audio.flac --audio holly-8bit-6000/test_audio.flac --gap 0.3
 
 # A1 — interactive: type, Enter to speak. No --audio means the text line.
 .venv/bin/python -m hollyhost.app --tts null                       # tone stand-in (no downloads)
@@ -59,7 +75,7 @@ the host is plumbing around it. Run everything with `.venv/bin/python`.
 .venv/bin/python -m hollyhost.app --tts omnivoice                  # GPU clone of voices/holly_base.flac (see below)
 
 # No audio device? Rehearse the identical loop with a hand-driven clock (no sounddevice needed):
-.venv/bin/python -m hollyhost.app --audio ../Holly/test_audio.flac --dry
+.venv/bin/python -m hollyhost.app --audio holly-8bit-6000/test_audio.flac --dry
 .venv/bin/python -m hollyhost.app --tts piper --dry
 ```
 
@@ -303,7 +319,7 @@ Verified on `en_US-lessac-medium` (22.05 kHz): the shipping HeadAudio classifier
 mouth well on this synthetic speech (~7–8 pose-changes/s, 9–11 distinct visemes per sentence,
 ~5 ms analysis per second of speech) — the HANDOFF's open "classifier on synthetic speech"
 question, answered positively for a stock voice. Judge each new voice by eye with
-`../Holly/tools/reference_player.py` / `render_filmstrip.py`; if one gives poor visemes the fix is
+`holly-8bit-6000/tools/reference_player.py` / `render_filmstrip.py`; if one gives poor visemes the fix is
 the classifier's gate/gain knobs, never the renderer.
 
 `tools/voice_check.py` runs the shipping classifier over a few sentences per voice and prints
@@ -451,5 +467,5 @@ installed but unused by the tests.) **No test runs an LLM** — the chat path is
   component's existing knobs (incl. its per-viseme `visemeMaxs` gain) for by-eye settling;
   *custom* per-viseme gain curves would be a component-side change and are not done here.
 - **Still open:** the classifier-quality judgement on real TTS voices needs a person: run
-  `../Holly/tools/reference_player.py` and `render_filmstrip.py` per voice; if a voice gives
+  `holly-8bit-6000/tools/reference_player.py` and `render_filmstrip.py` per voice; if a voice gives
   poor visemes the fix is the classifier's gate/gain knobs, never the renderer.

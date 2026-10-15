@@ -8,3 +8,7 @@ models/
 vendor/
 hollyhost_config.json
 hollyhost_settings.json
+
+# Carried over from the component repo when it was merged in.
+nohup.out
+.ruff_cache/
