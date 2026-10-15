@@ -54,25 +54,44 @@ class Brain(Protocol):
         """Yield reply text in order, in deltas of any size (one token, or one word)."""
         ...
 
-#: Phase D persona: Holly's *voice*, not just output the pipeline can stream. Two things this
-#: prompt is doing on purpose:
-#:   - it pushes the model toward spoken-form text (numbers spoken, abbreviations spelled out,
-#:     no symbols/markdown), which is exactly what `normalize.preprocess` then guarantees even
-#:     when a model leaks them anyway. Persona and preprocessing are the same Phase D idea from
-#:     two sides: the prompt asks, the normalizer enforces.
-#:   - it keeps replies short and spoken so the first sentence reaches TTS fast (the Phase C
-#:     latency contract).
-#: Whether this *sounds* like Holly can only be judged by a person running a real model -- see
-#: HANDOFF "Open items"; the text is tuned for spoken output, the ear is the final judge.
-DEFAULT_PERSONA = (
-    "You are Holly, a holographic personality aboard a spaceship: vain, lazy, and 52 times the "
-    "intelligence of a human being. Answer in character -- dry, deadpan, faintly contemptuous, "
-    "allergic to effort -- in two or three short spoken sentences, never more. "
+#: Holly's voice lives in a file, not in code: `holly_personality_prompt.md` in the repo root
+#: (tracked, user-editable -- the character source, built from the Red Dwarf scripts). Loaded
+#: at import; if the file is ever missing the host still runs on a minimal fallback.
+#:
+#: The file prompt is big (~2k tokens), which is why `--ctx` defaults to 4096, and it is pure
+#: character: the *spoken-form* contract (short spoken sentences, no markdown/symbols/lists --
+#: what `normalize.preprocess` then enforces) and the Phase C latency contract (short first
+#: sentences reach TTS fast) live in the fallback below and in the pipeline, not in the file.
+DEFAULT_PERSONA_FILE = Path(__file__).resolve().parents[1] / "holly_personality_prompt.md"
+
+#: Phase D spoken-output rules, appended to the file persona -- and the whole prompt when the
+#: file is absent. Persona and preprocessing are the same Phase D idea from two sides: the
+#: prompt asks, the normalizer enforces.
+SPOKEN_FORM_RULES = (
+    "Answer in two or three short spoken sentences, never more. "
     "Never mention being an AI, a model or a program. "
     "Write for a voice, not a screen: use contractions, keep numbers plain with no symbols, "
     "spell out any abbreviation, and never use markdown, lists, headers, emoji, asterisks or "
     "parentheses."
 )
+
+FALLBACK_PERSONA = (
+    "You are Holly, a holographic personality aboard a spaceship: vain, lazy, and 52 times the "
+    "intelligence of a human being. Answer in character -- dry, deadpan, faintly contemptuous, "
+    "allergic to effort. " + SPOKEN_FORM_RULES
+)
+
+
+def default_persona() -> str:
+    """The file persona (whitespace-normalised) plus the spoken-form rules; fallback if absent."""
+    try:
+        text = DEFAULT_PERSONA_FILE.read_text()
+    except OSError:
+        return FALLBACK_PERSONA
+    return " ".join(text.split()) + " " + SPOKEN_FORM_RULES
+
+
+DEFAULT_PERSONA = default_persona()
 
 
 def persona_from(spec: str | None) -> str:
@@ -265,7 +284,7 @@ def _error_text(err) -> str:
 
 def make_brain(kind: str | None, *, model: str | Path | None = None,
                base_url: str | None = None, http_model: str | None = None,
-               ctx: int = 2048, gpu_layers: int = -1, max_tokens: int = 200,
+               ctx: int = 4096, gpu_layers: int = -1, max_tokens: int = 200,
                temperature: float = 0.7, threads: int | None = None,
                api_key: str | None = None,
                script: list[str] | None = None) -> Brain | None:

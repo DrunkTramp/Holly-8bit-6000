@@ -184,9 +184,12 @@ is `--calibrate --brain script --tts null` (no model, no GPU).
 
 ### Persona and spoken text — Phase D
 
-`DEFAULT_PERSONA` is Holly's system prompt (override with `--persona text` or `--persona @file`). It
-asks the model to answer in short spoken sentences and to write for a voice — no markdown, symbols
-or lists. On top of that, every sentence is passed through `normalize.preprocess` **after** splitting
+Holly's system prompt lives in **`holly_personality_prompt.md`** (repo root, tracked, editable
+— that file is the character source; edit it to tune the voice). It is loaded at startup and
+appended with the spoken-form rules (short spoken sentences, no markdown/symbols/lists — what
+`normalize.preprocess` then enforces). Override the whole thing with `--persona text` or
+`--persona @file`. Because the file persona is ~2k tokens, `--ctx` defaults to 4096.
+On top of the prompt, every sentence is passed through `normalize.preprocess` **after** splitting
 and **before** synthesis, so a reply that leaks `576x432`, `12/s`, `12.5`, `etc.` or `**bold**` is
 rewritten into spoken words the voice can actually phonemise (`576 by 432`, `12 per second`, `12
 point 5`, `et cetera`, plain text). Captions and history keep the original text. If your voice's own

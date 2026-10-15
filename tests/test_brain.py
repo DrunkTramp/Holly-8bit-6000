@@ -193,6 +193,18 @@ class TestScriptBrain(unittest.TestCase):
         with self.assertRaises(FileNotFoundError):
             persona_from("@nope.txt")
 
+    def test_default_persona_lives_in_the_md_file(self):
+        """The character comes from holly_personality_prompt.md, not from a string in code."""
+        from hollyhost.brain import DEFAULT_PERSONA_FILE, SPOKEN_FORM_RULES
+
+        if not DEFAULT_PERSONA_FILE.exists():
+            self.skipTest("persona file not in this checkout")
+        body = " ".join(DEFAULT_PERSONA_FILE.read_text().split())
+        self.assertTrue(DEFAULT_PERSONA.startswith(body[:200]),
+                        "the default persona should open with the file's text")
+        self.assertIn(SPOKEN_FORM_RULES, DEFAULT_PERSONA,
+                      "the spoken-form rules must ride along with the file persona")
+
 
 class TestOpenAICompatBrainErrors(unittest.TestCase):
     """The endpoint seam: a server-side failure (LM Studio's model refusing to load, a bad

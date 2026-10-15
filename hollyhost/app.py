@@ -73,7 +73,9 @@ def parse_args(argv=None):
     p.add_argument("--http-model", default=None, help="Model name for --brain http (llama.cpp ignores it).")
     p.add_argument("--api-key", default=os.environ.get("OPENAI_API_KEY"),
                    help="Bearer token for --brain http (default: $OPENAI_API_KEY, if set).")
-    p.add_argument("--ctx", type=int, default=2048, help="Context window tokens (keep it small).")
+    p.add_argument("--ctx", type=int, default=4096,
+                   help="Context window tokens. The file persona is ~2k tokens, so this needs "
+                        "4096+; keep it as small as the persona allows (llama tier).")
     p.add_argument("--gpu-layers", type=int, default=None,
                    help="GGUF layers to offload (-1 = all). Default comes from the calibration "
                         "config when present, else -1.")
@@ -82,7 +84,9 @@ def parse_args(argv=None):
                         "the calibration config when present, else 200.")
     p.add_argument("--temp", type=float, default=0.7)
     p.add_argument("--threads", type=int, default=None, help="CPU inference threads (default: all).")
-    p.add_argument("--persona", default=None, help="System prompt, or @file. Phase D tunes this.")
+    p.add_argument("--persona", default=None,
+                   help="System prompt text, or @file. Default: holly_personality_prompt.md "
+                        "(edit that file to tune the character).")
     p.add_argument("--no-normalize", action="store_true",
                    help="Skip Phase D TTS text preprocessing (expand numbers/abbreviations/"
                         "symbols to spoken words before synthesis). Off only if your voice's own "
