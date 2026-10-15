@@ -189,6 +189,29 @@ class InteractiveUI:
             style.configure("TScale", background=BG, troughcolor=FIELD)
             style.configure("TScrollbar", background=PANEL, troughcolor=BG, bordercolor=EDGE,
                             arrowcolor=FG)
+
+            # Tabs and comboboxes keep clam's near-black default text on our dark
+            # backgrounds unless each piece is named explicitly.
+            style.configure("TNotebook", background=BG, bordercolor=EDGE)
+            style.configure("TNotebook.Tab", background=PANEL, foreground=MUTED,
+                            padding=[10, 5])
+            style.map("TNotebook.Tab",
+                      background=[("selected", EDGE), ("active", FIELD)],
+                      foreground=[("selected", "#ffffff"), ("active", FG)])
+            style.configure("TCombobox", fieldbackground=FIELD, background=PANEL,
+                            foreground=FG, arrowcolor=FG, borderwidth=0)
+            style.map("TCombobox",
+                      fieldbackground=[("readonly", FIELD), ("disabled", PANEL)],
+                      foreground=[("readonly", FG), ("disabled", MUTED)],
+                      selectbackground=[("readonly", FIELD)],
+                      selectforeground=[("readonly", FG)],
+                      arrowcolor=[("disabled", MUTED)])
+            # The dropdown list is a plain Tk Listbox, not a ttk widget: it only listens
+            # to the option database.
+            self.root.option_add("*TCombobox*Listbox*Background", PANEL)
+            self.root.option_add("*TCombobox*Listbox*Foreground", FG)
+            self.root.option_add("*TCombobox*Listbox*selectBackground", EDGE)
+            self.root.option_add("*TCombobox*Listbox*selectForeground", "#ffffff")
         except tk.TclError:
             pass  # a theme without these element options: default look, same layout
 
